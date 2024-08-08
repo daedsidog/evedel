@@ -1,0 +1,11 @@
+* coderel: Instructed LLM programmer
+
+coderel is a [[https://github.com/karthink/gptel][gptel]] extension Emacs package specialized for ergonomic programming with an LLM.
+
+coderel aims to shift the programmer from manually writing code to instead write instructions for the model on how to write the code.
+
+* Acknowledgments
+
+- [[https://github.com/karthink][Karthik Chikmagalur]] for the [[https://github.com/karthink/gptel][gptel]] package
+
+#  LocalWords:  LLM coderel
