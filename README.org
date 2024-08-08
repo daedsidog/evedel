@@ -4,7 +4,7 @@ coderel is a [[https://github.com/karthink/gptel][gptel]] extension Emacs packag
 
 coderel aims to shift the programmer from manually writing code to instead write instructions for the model on how to write the code.
 
-* Acknowledgments
+** Acknowledgments
 
 - [[https://github.com/karthink][Karthik Chikmagalur]] for the [[https://github.com/karthink/gptel][gptel]] package
 
