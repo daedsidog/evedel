@@ -1,4 +1,4 @@
-;;; coderel.el --- Instructed LLM programmer
+;;; coderel.el --- Instructed LLM programmer -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024  daedsidog
 
@@ -10,93 +10,243 @@
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
-;; This program is free software; you can redistribute it and/or modify
-;; it under the terms of the GNU General Public License as published by
-;; the Free Software Foundation, either version 3 of the License, or
-;; (at your option) any later version.
+;; This program is free software; you can redistribute it and/or modify it under the terms of the
+;; GNU General Public License as published by the Free Software Foundation, either version 3 of the
+;; License, or (at your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+;; even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+;; General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License along with this program.  If
+;; not, see <https://www.gnu.org/licenses/>.
 
-;; This program is distributed in the hope that it will be useful,
-;; but WITHOUT ANY WARRANTY; without even the implied warranty of
-;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-;; GNU General Public License for more details.
-
-;; You should have received a copy of the GNU General Public License
-;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+;; This file is NOT part of GNU Emacs.
 
 ;;; Commentary:
 
 ;; coderel is a gptel extension Emacs package specialized for ergonomic programming with an LLM.  It
 ;; aims to eliminate manual aspects of software development by relegating them to an LLM.  The
-;; programmer acts as an overseer over their LLM by creating various instruction bookmarks across
+;; programmer acts as an overseer over their LLM by creating various instruction overlays across
 ;; their project.
 
 ;;; Code:
 
-;;; -*- lexical-binding: t; -*-
-
 (require 'cl-lib)
 
-(defcustom cel-reference-color "yellow"
+(defcustom ce-reference-color "yellow"
   "Color to be used as a tint for reference overlays."
   :type 'string
   :group 'coderel)
 
-(defcustom cel-directive-color "orange"
+(defcustom ce-directive-color "orange"
   "Color to be used as a tint for directive overlays."
   :type 'string
   :group 'coderel)
 
-(defcustom cel-result-color "cyan"
+(defcustom ce-result-color "cyan"
   "Color to be used as a tint for result overlays."
   :type 'string
   :group 'coderel)
 
-(defun cel--tint (source-color-name tint-color-name)
-  "Return the color resulting from tinting SOURCE-COLOR-NAME with TINT-COLOR-NAME."
-  (let ((tint (color-name-to-rgb tint-color-name))
-        (color (color-name-to-rgb source-color-name)))
-    (cl-mapcar (lambda (color tint)
-                 (+ (* 0.9 color) (* 0.1 tint)))
-               color
-               tint)))
+(defcustom ce-instruction-bg-tint-intensity 0.1
+  "Default intensity for background tinting of instructions."
+  :type 'float
+  :group 'coderel)
 
-(defun cel-create-instruction-overlay (type start end name)
-  "Create an instruction overlay of TYPE from START to END with the given NAME."
-  (let ((overlay (if (eq type 'buffer)
-                     (make-overlay (point-min) (point-max) (current-buffer))
-                   (cel--make-overlay-in-region (current-buffer) start end))))
-    (overlay-put overlay 'name name)
-    ;; TODO: create bookmark here
-    overlay))
+(defcustom ce-instruction-label-tint-intensity 0.5
+  "Default intensity for label tinting of instructions."
+  :type 'float
+  :group 'coderel)
 
-(defun cel-create-region-reference (start end name)
-  "Create a region reference from START to END with the given NAME."
-  (interactive "r\nsName: ")
-  (cel-create-instruction-overlay 'region start end name))
+(defvar ce--instructions (make-hash-table))
 
-(defun cel-create-buffer-reference (name)
-  "Create a buffer reference for the current buffer with the given NAME."
-  (interactive "sName: ")
-  (cel-create-instruction-overlay 'buffer (point-min) (point-max) name))
+(defun ce--tint (source-color-name tint-color-name &optional intensity)
+  "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
 
-(defun cel-create-reference (name)
-  "Create a reference label with the given NAME."
-  (interactive "sReference name: ")
-  (let ((label (if (use-region-p)
-                   (cel-create-region-reference (region-beginning) (region-end) name)
-                 (cel-create-buffer-reference name))))
-    label))
+INTENSITY controls the tinting intensity, where 0 means no tinting and 1 means
+that the resulting color is the same as the TINT-COLOR-NAME color."
+  (let* ((tint (color-name-to-rgb tint-color-name))
+         (color (color-name-to-rgb source-color-name))
+         (result (cl-mapcar (lambda (color tint)
+                              (+ (* (- 1.0 intensity) color)
+                                 (* intensity tint)))
+                            color
+                            tint)))
+    (apply 'color-rgb-to-hex `(,@result 2))))
 
-(defun cel--make-overlay-in-region (buffer start end)
-  "Create an overlay in BUFFER from START to END."
+(defun ce--highest-priority-overlay (overlays)
+  "Return the coderel overlay with the highest priority from a list of OVERLAYS."
+  (cl-reduce (lambda (acc overlay)
+               (if (and (overlay-get overlay 'ce-instruction)
+                        (or (not acc)
+                            (> (or (overlay-get overlay 'priority) 0)
+                               (or (overlay-get acc 'priority) 0))))
+                   overlay
+                 acc))
+             overlays
+             :initial-value nil))
+
+(defun ce--instruction-type (overlay)
+  "Return the type of instruction for the given OVERLAY.
+
+The type can be either REFERENCE, DIRECTIVE, or FEEDBACK."
+  (unless (overlay-get overlay 'ce-instruction)
+    (error "Overlay does not have property 'ce-instruction'"))
+  (overlay-get overlay 'instruction-type))
+
+(defun ce--create-instruction-overlay-in-region (buffer start end)
+  "Create an overlay in BUFFER from START to END of the lines."
   (with-current-buffer buffer
-    (let ((overlay (make-overlay start end)))
-      (overlay-put overlay 'before-string "REFERENCE")
-      (overlay-put overlay 'face 'highlight))))
-  
+    (save-excursion
+      (let ((start (progn (goto-char start) (pos-bol)))
+            (end (progn (goto-char end) (pos-bol))))
+        (let ((partially-contained-instructions
+               (ce--partially-contained-instructions buffer start end)))
+          (dolist (ov partially-contained-instructions)
+            (setq start (min start (overlay-start ov)))
+            (setq end (max end (overlay-end ov))))
+          (mapc #'ce--delete-instruction partially-contained-instructions)
+          (let ((overlay (make-overlay start end))
+                (bg-color (face-background 'default))
+                (label-color (face-foreground 'default)))
+            (overlay-put overlay 'ce-instruction t)
+            (overlay-put overlay 'ce-bg-color bg-color)
+            (overlay-put overlay 'ce-label-color label-color)
+            (puthash overlay t ce--instructions)
+            overlay))))))
+
+(defun ce--instruction-p (overlay)
+  "Return non-nil if OVERLAY is an instruction overlay."
+  (overlay-get overlay 'ce-instruction))
+
+(defun ce--parent-instruction (instruction)
+  "Return the parent of the given INSTRUCTION overlay."
+  (let ((buf (overlay-buffer instruction))
+        (start (overlay-start instruction))
+        (end (overlay-end instruction)))
+    (with-current-buffer buf
+      (catch 'found
+        (dolist (ov (overlays-in start end))
+          (when (and (not (eq ov instruction))
+                     (> (overlay-start ov) start)
+                     (< (overlay-end ov) end))
+            (throw 'found ov)))
+        nil))))
+
+(defun ce--child-instructions (instruction)
+  "Return the child instructions of the given INSTRUCTION overlay."
+  (let ((children (ce--wholly-contained-instructions (overlay-buffer instruction)
+                                                     (overlay-start instruction)
+                                                     (overlay-end instruction))))
+    (dolist (child children)
+      (setq children (cl-set-difference children
+                                        (ce--child-instructions child))))
+    children))
+
+(defun ce--create-reference-in-region (name buffer start end)
+  "Create a region reference from START to END with the given NAME in BUFFER."
+  (let ((ov (ce--create-instruction-overlay-in-region buffer start end)))
+    (overlay-put ov 'evaporate t)
+    (overlay-put ov 'ce-reference-name name)
+    (overlay-put ov 'ce-instruction-type 'reference)
+    (ce--update-instruction-overlay ov t)
+    ov))
+
+;;;###autoload
+(defun ce-create-reference (name)
+  "Create a reference instruction with the given NAME."
+  (interactive "sReference name: ")
+  (let ((instruction (if (use-region-p)
+                         (ce--create-reference-in-region name
+                                                         (current-buffer)
+                                                         (region-beginning)
+                                                         (region-end))
+                       (ce--create-reference-in-region name
+                                                       (current-buffer)
+                                                       (point-min)
+                                                       (point-max)))))
+    instruction))
+
+(defun ce--delete-instruction (instruction)
+  "Delete the INSTRUCTION overlay."
+  (let ((children (ce--child-instructions instruction)))
+    (remhash instruction ce--instructions)
+    (delete-overlay instruction)
+    (dolist (child children)
+      (if (eq (overlay-get child 'ce-instruction-type)
+              (overlay-get instruction 'ce-instruction-type))
+          (progn
+            (overlay-put child 'ce-bg-color (overlay-get instruction 'ce-bg-color))
+            (overlay-put child 'ce-label-color (overlay-get instruction 'ce-label-color)))
+        (overlay-put child 'ce-bg-color 'default)
+        (overlay-put child 'ce-label-color 'default))
+      (ce--update-instruction-overlay child t))))
+
+(defun ce--update-instruction-overlay (instruction &optional update-children)
+  "Update the appearance of the INSTRUCTION overlay.
+
+This function updates the overlay label text, color of the label text, and the
+background of the instruction overlay.  This function should be called every
+time there is a hierarchy or status change in the instruction overlay that we
+wish to reflect.
+
+Also updates the child instructions of the INSTRUCTION, if UPDATE-CHILDREN is
+non-nil."
+  (unless (ce--instruction-p instruction)
+    (error "%s is not an instruction overlay" instruction))
+  (let ((label-color (overlay-get instruction 'ce-label-color))
+        (bg-color (overlay-get instruction 'ce-bg-color)))
+    (let* ((instruction-type (overlay-get instruction 'ce-instruction-type))
+           (color (pcase instruction-type
+                    ('reference ce-reference-color)
+                    ('directive ce-directive-color)
+                    ('result ce-result-color)
+                    (_ (error "%s is not a valid instruction type" instruction-type))))
+           (label-tint (ce--tint label-color color ce-instruction-label-tint-intensity))
+           (bg-tint (ce--tint bg-color color ce-instruction-bg-tint-intensity)))
+      (overlay-put instruction 'before-string
+                   (propertize (or (overlay-get instruction 'before-string) "")
+                               'face `(:foreground ,label-tint :background ,bg-tint)))
+      (overlay-put instruction 'face `(:background ,bg-tint))))
+  (when update-children
+    (dolist (child (ce--child-instructions instruction))
+      (ce--update-instruction-overlay child update-children))))
+
+(defun ce-delete-instruction-at-point ()
+  "Delete the instruction instruction at point."
+  (interactive)
+  (let* ((overlays (seq-filter (lambda (ov) (overlay-get ov 'ce-instruction))
+                               (overlays-at (point))))
+         (target (ce--highest-priority-overlay overlays)))
+    (when target
+      (ce--delete-instruction target))))
+
+(defun ce--wholly-contained-instructions (buffer start end)
+  "Return coderel overlays in BUFFER that are entirely within START and END."
+  (with-current-buffer buffer
+    (cl-remove-if-not (lambda (ov)
+                        (and (overlay-get ov 'ce-instruction)
+                             (>= (overlay-start ov) start)
+                             (<= (overlay-end ov) end)))
+                      (overlays-in start end))))
+
+(defun ce--partially-contained-instructions (buffer start end)
+  "Return instructions in BUFFER that overlap with START and END.
+
+Does not return instructions that contain the region in its entirety the region."
+  (with-current-buffer buffer
+    (cl-remove-if-not (lambda (ov)
+                        (and (overlay-get ov 'ce-instruction)
+                             (or (< (overlay-start ov) start)
+                                 (> (overlay-end ov) end))
+                             (not (and (<= (overlay-start ov) start)
+                                       (>= (overlay-end ov) end)))))
+                      (overlays-in start end))))
+
 (provide 'coderel)
 ;;; coderel.el ends here.
 
 ;; Local Variables:
-;; read-symbol-shorthands: (("cel-" . "coderel-"));
+;; read-symbol-shorthands: (("ce-" . "coderel-"));
 ;; End:
