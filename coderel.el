@@ -75,32 +75,36 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
                             tint)))
     (apply 'color-rgb-to-hex `(,@result 2))))
 
-(defun ce--highest-priority-overlay (overlays)
-  "Return the coderel overlay with the highest priority from a list of OVERLAYS."
-  (cl-reduce (lambda (acc overlay)
-               (if (and (overlay-get overlay 'ce-instruction)
+(defun ce--highest-priority-instruction (instructions)
+  "Return the instruction with the highest priority from the INSTRUCTIONS list."
+  (cl-reduce (lambda (acc instruction)
+               (if (and (overlay-get instruction 'ce-instruction)
                         (or (not acc)
-                            (> (or (overlay-get overlay 'priority) 0)
+                            (> (or (overlay-get instruction 'priority) 0)
                                (or (overlay-get acc 'priority) 0))))
-                   overlay
+                   instruction
                  acc))
-             overlays
+             instructions
              :initial-value nil))
 
-(defun ce--instruction-type (overlay)
-  "Return the type of instruction for the given OVERLAY.
-
-The type can be either REFERENCE, DIRECTIVE, or FEEDBACK."
-  (unless (overlay-get overlay 'ce-instruction)
-    (error "Overlay does not have property 'ce-instruction'"))
-  (overlay-get overlay 'instruction-type))
+(defun ce--instruction-type (instruction)
+  "Return the type of the INSTRUCTION overlay."
+  (if-let ((type (overlay-get instruction 'instruction-type)))
+      type
+    (error "%s is not an instruction overlay" instruction)))
 
 (defun ce--create-instruction-overlay-in-region (buffer start end)
   "Create an overlay in BUFFER from START to END of the lines."
   (with-current-buffer buffer
     (save-excursion
-      (let ((start (progn (goto-char start) (pos-bol)))
-            (end (progn (goto-char end) (pos-bol))))
+      (let ((start (progn
+                     (goto-char start)
+                     (pos-bol)))
+            (end (progn
+                   (goto-char end)
+                   (goto-char (pos-eol))
+                   (forward-char)
+                   (point))))
         (let ((partially-contained-instructions
                (ce--partially-contained-instructions buffer start end)))
           (dolist (ov partially-contained-instructions)
@@ -136,9 +140,10 @@ The type can be either REFERENCE, DIRECTIVE, or FEEDBACK."
 
 (defun ce--child-instructions (instruction)
   "Return the child instructions of the given INSTRUCTION overlay."
-  (let ((children (ce--wholly-contained-instructions (overlay-buffer instruction)
-                                                     (overlay-start instruction)
-                                                     (overlay-end instruction))))
+  (let ((children (remove instruction
+                          (ce--wholly-contained-instructions (overlay-buffer instruction)
+                                                             (overlay-start instruction)
+                                                             (overlay-end instruction)))))
     (dolist (child children)
       (setq children (cl-set-difference children
                                         (ce--child-instructions child))))
@@ -158,10 +163,12 @@ The type can be either REFERENCE, DIRECTIVE, or FEEDBACK."
   "Create a reference instruction with the given NAME."
   (interactive "sReference name: ")
   (let ((instruction (if (use-region-p)
-                         (ce--create-reference-in-region name
-                                                         (current-buffer)
-                                                         (region-beginning)
-                                                         (region-end))
+                         (progn
+                           (ce--create-reference-in-region name
+                                                           (current-buffer)
+                                                           (region-beginning)
+                                                           (region-end))
+                           (deactivate-mark))
                        (ce--create-reference-in-region name
                                                        (current-buffer)
                                                        (point-min)
@@ -195,30 +202,50 @@ Also updates the child instructions of the INSTRUCTION, if UPDATE-CHILDREN is
 non-nil."
   (unless (ce--instruction-p instruction)
     (error "%s is not an instruction overlay" instruction))
-  (let ((label-color (overlay-get instruction 'ce-label-color))
-        (bg-color (overlay-get instruction 'ce-bg-color)))
-    (let* ((instruction-type (overlay-get instruction 'ce-instruction-type))
-           (color (pcase instruction-type
-                    ('reference ce-reference-color)
-                    ('directive ce-directive-color)
-                    ('result ce-result-color)
-                    (_ (error "%s is not a valid instruction type" instruction-type))))
-           (label-tint (ce--tint label-color color ce-instruction-label-tint-intensity))
-           (bg-tint (ce--tint bg-color color ce-instruction-bg-tint-intensity)))
-      (overlay-put instruction 'before-string
-                   (propertize (or (overlay-get instruction 'before-string) "")
-                               'face `(:foreground ,label-tint :background ,bg-tint)))
-      (overlay-put instruction 'face `(:background ,bg-tint))))
-  (when update-children
-    (dolist (child (ce--child-instructions instruction))
-      (ce--update-instruction-overlay child update-children))))
+  (cl-labels
+      ((aux (instruction &optional update-children (priority 0) (parent nil))
+         (let ((label-color
+                (if parent
+                    (overlay-get parent 'ce-label-color)
+                  (overlay-get instruction 'ce-label-color)))
+               (bg-color
+                (if parent
+                    (overlay-get parent 'ce-bg-color)
+                  (overlay-get instruction 'ce-bg-color))))
+           (let ((instruction-type (overlay-get instruction 'ce-instruction-type))
+                 (color))
+             ;; Instruction-specific updates
+             (pcase instruction-type
+               ('reference ; REFERENCE
+                (setq color ce-reference-color)
+                (overlay-put instruction 'before-string "REFERENCE\n"))
+               ('directive ; DIRECTIVE
+                (setq color ce-directive-color)
+                (overlay-put instruction 'before-string "DIRECTIVE\n"))
+               ('result    ; RESULT
+                (setq color ce-result-color)
+                (overlay-put instruction 'before-string "RESULT\n")))
+             (let ((label-tint (ce--tint label-color color ce-instruction-label-tint-intensity))
+                   (bg-tint (ce--tint bg-color color ce-instruction-bg-tint-intensity)))
+               (overlay-put instruction
+                            'before-string
+                            (propertize (or (overlay-get instruction 'before-string) "")
+                                        'face
+                                        `(:extend t :foreground ,label-tint :background ,bg-tint)))
+               (overlay-put instruction
+                            'face
+                            `(:extend t :background ,bg-tint)))))
+         (when update-children
+           (dolist (child (ce--child-instructions instruction))
+             (aux child update-children (1+ priority) instruction)))))
+    (aux instruction update-children (overlay-get instruction 'priority))))
 
 (defun ce-delete-instruction-at-point ()
   "Delete the instruction instruction at point."
   (interactive)
-  (let* ((overlays (seq-filter (lambda (ov) (overlay-get ov 'ce-instruction))
+  (let* ((instructions (seq-filter (lambda (ov) (overlay-get ov 'ce-instruction))
                                (overlays-at (point))))
-         (target (ce--highest-priority-overlay overlays)))
+         (target (ce--highest-priority-instruction instructions)))
     (when target
       (ce--delete-instruction target))))
 
