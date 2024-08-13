@@ -61,6 +61,8 @@
 
 (defvar ce--instructions (make-hash-table))
 
+(defvar ce--default-instruction-priority -99)
+
 (defun ce--tint (source-color-name tint-color-name &optional intensity)
   "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
 
@@ -80,8 +82,10 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
   (cl-reduce (lambda (acc instruction)
                (if (and (overlay-get instruction 'ce-instruction)
                         (or (not acc)
-                            (> (or (overlay-get instruction 'priority) 0)
-                               (or (overlay-get acc 'priority) 0))))
+                            (> (or (overlay-get instruction 'priority)
+                                   ce--default-instruction-priority))
+                            (or (overlay-get acc 'priority)
+                                ce--default-instruction-priority)))
                    instruction
                  acc))
              instructions
@@ -97,26 +101,16 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
   "Create an overlay in BUFFER from START to END of the lines."
   (with-current-buffer buffer
     (save-excursion
-      (let ((start (progn
-                     (goto-char start)
-                     (pos-bol)))
-            (end (progn
-                   (goto-char end)
-                   (goto-char (pos-eol))
-                   (forward-char)
-                   (point))))
+      (let ((start (progn (goto-char start) (pos-bol)))
+            (end (progn (goto-char end) (pos-eol))))
         (let ((partially-contained-instructions
                (ce--partially-contained-instructions buffer start end)))
           (dolist (ov partially-contained-instructions)
             (setq start (min start (overlay-start ov)))
             (setq end (max end (overlay-end ov))))
           (mapc #'ce--delete-instruction partially-contained-instructions)
-          (let ((overlay (make-overlay start end))
-                (bg-color (face-background 'default))
-                (label-color (face-foreground 'default)))
+          (let ((overlay (make-overlay start end)))
             (overlay-put overlay 'ce-instruction t)
-            (overlay-put overlay 'ce-bg-color bg-color)
-            (overlay-put overlay 'ce-label-color label-color)
             (puthash overlay t ce--instructions)
             overlay))))))
 
@@ -128,15 +122,22 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
   "Return the parent of the given INSTRUCTION overlay."
   (let ((buf (overlay-buffer instruction))
         (start (overlay-start instruction))
-        (end (overlay-end instruction)))
+        (end (overlay-end instruction))
+        (smallest-overlay nil))
     (with-current-buffer buf
-      (catch 'found
+      (let ((min-start (point-min))
+            (max-end (point-max)))
         (dolist (ov (overlays-in start end))
-          (when (and (not (eq ov instruction))
-                     (> (overlay-start ov) start)
-                     (< (overlay-end ov) end))
-            (throw 'found ov)))
-        nil))))
+          (let ((ov-start (overlay-start ov))
+                (ov-end (overlay-end ov)))
+            (when (and (not (eq ov instruction))
+                       (overlay-get ov 'ce-instruction)
+                       (<= min-start ov-start start)
+                       (>= max-end ov-end start))
+              (setq smallest-overlay ov
+                    min-start ov-start
+                    max-end ov-end))))))
+    smallest-overlay))
 
 (defun ce--child-instructions (instruction)
   "Return the child instructions of the given INSTRUCTION overlay."
@@ -149,28 +150,25 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
                                         (ce--child-instructions child))))
     children))
 
-(defun ce--create-reference-in-region (name buffer start end)
-  "Create a region reference from START to END with the given NAME in BUFFER."
+(defun ce--create-reference-in-region (buffer start end)
+  "Create a region reference from START to END in BUFFER."
   (let ((ov (ce--create-instruction-overlay-in-region buffer start end)))
     (overlay-put ov 'evaporate t)
-    (overlay-put ov 'ce-reference-name name)
     (overlay-put ov 'ce-instruction-type 'reference)
     (ce--update-instruction-overlay ov t)
     ov))
 
 ;;;###autoload
-(defun ce-create-reference (name)
-  "Create a reference instruction with the given NAME."
-  (interactive "sReference name: ")
+(defun ce-create-reference ()
+  "Create a reference instruction."
+  (interactive)
   (let ((instruction (if (use-region-p)
                          (progn
-                           (ce--create-reference-in-region name
-                                                           (current-buffer)
+                           (ce--create-reference-in-region (current-buffer)
                                                            (region-beginning)
                                                            (region-end))
                            (deactivate-mark))
-                       (ce--create-reference-in-region name
-                                                       (current-buffer)
+                       (ce--create-reference-in-region (current-buffer)
                                                        (point-min)
                                                        (point-max)))))
     instruction))
@@ -203,42 +201,52 @@ non-nil."
   (unless (ce--instruction-p instruction)
     (error "%s is not an instruction overlay" instruction))
   (cl-labels
-      ((aux (instruction &optional update-children (priority 0) (parent nil))
-         (let ((label-color
-                (if parent
-                    (overlay-get parent 'ce-label-color)
-                  (overlay-get instruction 'ce-label-color)))
-               (bg-color
-                (if parent
-                    (overlay-get parent 'ce-bg-color)
-                  (overlay-get instruction 'ce-bg-color))))
-           (let ((instruction-type (overlay-get instruction 'ce-instruction-type))
-                 (color))
-             ;; Instruction-specific updates
-             (pcase instruction-type
-               ('reference ; REFERENCE
-                (setq color ce-reference-color)
-                (overlay-put instruction 'before-string "REFERENCE\n"))
-               ('directive ; DIRECTIVE
-                (setq color ce-directive-color)
-                (overlay-put instruction 'before-string "DIRECTIVE\n"))
-               ('result    ; RESULT
-                (setq color ce-result-color)
-                (overlay-put instruction 'before-string "RESULT\n")))
-             (let ((label-tint (ce--tint label-color color ce-instruction-label-tint-intensity))
-                   (bg-tint (ce--tint bg-color color ce-instruction-bg-tint-intensity)))
-               (overlay-put instruction
-                            'before-string
-                            (propertize (or (overlay-get instruction 'before-string) "")
-                                        'face
-                                        `(:extend t :foreground ,label-tint :background ,bg-tint)))
-               (overlay-put instruction
-                            'face
-                            `(:extend t :background ,bg-tint)))))
+      ((aux (instruction &optional update-children priority (parent nil))
+         (let ((instruction-type (overlay-get instruction 'ce-instruction-type))
+               (color)
+               (label))
+           ;; Instruction-specific updates
+           (pcase instruction-type
+             ('reference ; REFERENCE
+              (setq color ce-reference-color
+                    label "REFERENCE\n"))
+             ('directive ; DIRECTIVE
+              (setq color ce-directive-color
+                    label "DIRECTIVE\n"))
+             ('result    ; RESULT
+              (setq color ce-result-color
+                    label "RESULT\n")))
+           (let* ((parent-label-color
+                  (if parent
+                      (overlay-get parent 'ce-label-color)
+                    (face-foreground 'default)))
+                 (parent-bg-color
+                  (if parent
+                      (overlay-get parent 'ce-bg-color)
+                    (face-background 'default)))
+                 (label-color (ce--tint parent-label-color
+                                        color
+                                        ce-instruction-label-tint-intensity))
+                 (bg-color (ce--tint parent-bg-color color ce-instruction-bg-tint-intensity)))
+             (overlay-put instruction 'ce-bg-color bg-color)
+             (overlay-put instruction 'ce-label-color label-color)
+             (overlay-put instruction 'priority priority)
+             (overlay-put instruction
+                          'before-string
+                          (propertize label
+                                      'face
+                                      `(:extend t :foreground ,label-color :background ,bg-color)))
+             (overlay-put instruction
+                          'face
+                          `(:extend t :background ,bg-color))))
          (when update-children
            (dolist (child (ce--child-instructions instruction))
              (aux child update-children (1+ priority) instruction)))))
-    (aux instruction update-children (overlay-get instruction 'priority))))
+    (let ((parent (ce--parent-instruction instruction)))
+      (let ((priority (if parent
+                          (1+ (overlay-get parent 'priority))
+                        ce--default-instruction-priority)))
+        (aux instruction update-children priority parent)))))
 
 (defun ce-delete-instruction-at-point ()
   "Delete the instruction instruction at point."
