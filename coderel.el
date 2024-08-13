@@ -62,6 +62,86 @@
 (defvar ce--instructions (make-hash-table))
 (defvar ce--default-instruction-priority -99)
 
+;;;###autoload
+(defun ce-create-or-delete-reference ()
+  "Create a reference instruction within the selected region.
+
+If no region is selected, deletes the reference at the current point."
+  (interactive)
+  (if (use-region-p)
+      (let ((instruction (ce--create-reference-in-region (current-buffer)
+                                                         (region-beginning)
+                                                         (region-end))))
+        (deactivate-mark)
+        instruction)
+    (when-let ((instruction (car (ce--instructions-at-point (point) 'reference))))
+      (ce--delete-instruction instruction))))
+
+;;;###autoload
+(defun ce-save-instructions (path)
+  "Save instructions overlays to a file PATH specified by the user."
+  (interactive (list (read-file-name "Save instruction list to file: ")))
+  (let* ((overlays (hash-table-keys ce--instructions))
+         (saved-instructions ()))
+    (dolist (ov overlays)
+      (when (overlay-get ov 'ce-instruction-type)
+        (let* ((buf (overlay-buffer ov))
+               (file (buffer-file-name buf))
+               (buf-name (buffer-name buf)))
+          (when buf
+            (push (list :file file
+                        :buffer buf-name
+                        :overlay-start (overlay-start ov)
+                        :overlay-end (overlay-end ov)
+                        :properties (overlay-properties ov))
+                  saved-instructions)))))
+    (with-temp-file path
+      (prin1 saved-instructions (current-buffer))
+      (message "Saved coderel instructions to %s" path))))
+
+;;;###autoload
+(defun ce-load-instructions (path)
+  "Load instruction overlays from a file specified by PATH."
+  (interactive (list (read-file-name "Instruction list file: ")))
+  (cl-loop for ov being the hash-keys of ce--instructions
+           unless (and (overlay-buffer ov)
+                       (overlay-get ov 'ce-instruction-type))
+           do (remhash ov ce--instructions))
+  (when (and (not (zerop (hash-table-count ce--instructions)))
+             (called-interactively-p 'interactive))
+    (unless (y-or-n-p "Discard existing coderel instructions? ")
+      (user-error "Aborted")))
+  (let* ((loaded-instructions (with-temp-buffer
+                                (insert-file-contents path)
+                                (read (current-buffer)))))
+    (unless (listp loaded-instructions)
+      (user-error "Malformed coderel instruction list"))
+    (maphash (lambda (ov _val) (delete-overlay ov)) ce--instructions)
+    (setq ce--instructions (make-hash-table))
+    (let ((total (length loaded-instructions))
+          (restored 0))
+      (dolist (instr loaded-instructions)
+        (cl-destructuring-bind (&key file buffer overlay-start overlay-end properties) instr
+          (cond
+           ((file-exists-p file)
+            (with-current-buffer (find-file-noselect file)
+              (ce--restore-overlay (current-buffer) overlay-start overlay-end properties))
+            (cl-incf restored))
+           ((get-buffer buffer)
+            (with-current-buffer (get-buffer buffer)
+              (ce--restore-overlay (current-buffer) overlay-start overlay-end properties))
+            (cl-incf restored)))))
+      (message "Restored %d out of %d coderel instructions" restored total))))
+
+(defun ce-delete-instruction-at-point ()
+  "Delete the instruction instruction at point."
+  (interactive)
+  (let* ((instructions (seq-filter (lambda (ov) (overlay-get ov 'ce-instruction))
+                               (overlays-at (point))))
+         (target (ce--highest-priority-instruction instructions)))
+    (when target
+      (ce--delete-instruction target))))
+
 (defun ce--tint (source-color-name tint-color-name &optional intensity)
   "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
 
@@ -155,21 +235,6 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
     (ce--update-instruction-overlay ov t)
     ov))
 
-;;;###autoload
-(defun ce-create-or-delete-reference ()
-  "Create a reference instruction within the selected region.
-
-If no region is selected, deletes the reference at the current point."
-  (interactive)
-  (if (use-region-p)
-      (let ((instruction (ce--create-reference-in-region (current-buffer)
-                                                         (region-beginning)
-                                                         (region-end))))
-        (deactivate-mark)
-        instruction)
-    (when-let ((instruction (car (ce--instructions-at-point (point) 'reference))))
-      (ce--delete-instruction instruction))))
-
 (defun ce--delete-instruction (instruction)
   "Delete the INSTRUCTION overlay."
   (let ((children (ce--child-instructions instruction)))
@@ -254,14 +319,15 @@ non-nil."
                         ce--default-instruction-priority)))
         (aux instruction update-children priority parent)))))
 
-(defun ce-delete-instruction-at-point ()
-  "Delete the instruction instruction at point."
-  (interactive)
-  (let* ((instructions (seq-filter (lambda (ov) (overlay-get ov 'ce-instruction))
-                               (overlays-at (point))))
-         (target (ce--highest-priority-instruction instructions)))
-    (when target
-      (ce--delete-instruction target))))
+(defun ce--restore-overlay (buffer overlay-start overlay-end properties)
+  "Helper function to restore an instruction overlay in BUFFER.
+
+Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
+  (let ((new-ov (make-overlay overlay-start overlay-end buffer)))
+    (mapc (lambda (prop)
+            (overlay-put new-ov prop (plist-get properties prop)))
+          properties)
+    (puthash new-ov t ce--instructions)))
 
 (defun ce--wholly-contained-instructions (buffer start end)
   "Return coderel overlays in BUFFER that are entirely within START and END."
@@ -296,70 +362,6 @@ Does not return instructions that contain the region in its entirety the region.
                              (not (and (<= (overlay-start ov) start)
                                        (>= (overlay-end ov) end)))))
                       (overlays-in start end))))
-
-(defun ce-save-instructions (path)
-  "Save instructions overlays to a file PATH specified by the user."
-  (interactive (list (read-file-name "Save instruction list to file: ")))
-  (let* ((overlays (hash-table-keys ce--instructions))
-         (saved-instructions ()))
-    (dolist (ov overlays)
-      (when (overlay-get ov 'ce-instruction-type)
-        (let* ((buf (overlay-buffer ov))
-               (file (buffer-file-name buf))
-               (buf-name (buffer-name buf)))
-          (when buf
-            (push (list :file file
-                        :buffer buf-name
-                        :overlay-start (overlay-start ov)
-                        :overlay-end (overlay-end ov)
-                        :properties (overlay-properties ov))
-                  saved-instructions)))))
-    (with-temp-file path
-      (prin1 saved-instructions (current-buffer))
-      (message "Saved coderel instructions to %s" path))))
-
-(defun ce-load-instructions (path)
-  "Load instruction overlays from a file specified by PATH."
-  (interactive (list (read-file-name "Instruction list file: ")))
-  (cl-loop for ov being the hash-keys of ce--instructions
-           unless (and (overlay-buffer ov)
-                       (overlay-get ov 'ce-instruction-type))
-           do (remhash ov ce--instructions))
-  (when (and (not (zerop (hash-table-count ce--instructions)))
-             (called-interactively-p 'interactive))
-    (unless (y-or-n-p "Discard existing coderel instructions? ")
-      (user-error "Aborted")))
-  (let* ((loaded-instructions (with-temp-buffer
-                                (insert-file-contents path)
-                                (read (current-buffer)))))
-    (unless (listp loaded-instructions)
-      (user-error "Malformed coderel instruction list"))
-    (maphash (lambda (ov _val) (delete-overlay ov)) ce--instructions)
-    (setq ce--instructions (make-hash-table))
-    (let ((total (length loaded-instructions))
-          (restored 0))
-      (dolist (instr loaded-instructions)
-        (cl-destructuring-bind (&key file buffer overlay-start overlay-end properties) instr
-          (cond
-           ((file-exists-p file)
-            (with-current-buffer (find-file-noselect file)
-              (ce--restore-overlay (current-buffer) overlay-start overlay-end properties))
-            (cl-incf restored))
-           ((get-buffer buffer)
-            (with-current-buffer (get-buffer buffer)
-              (ce--restore-overlay (current-buffer) overlay-start overlay-end properties))
-            (cl-incf restored)))))
-      (message "Restored %d out of %d coderel instructions" restored total))))
-
-(defun ce--restore-overlay (buffer overlay-start overlay-end properties)
-  "Helper function to restore an instruction overlay in BUFFER.
-
-Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
-  (let ((new-ov (make-overlay overlay-start overlay-end buffer)))
-    (mapc (lambda (prop)
-            (overlay-put new-ov prop (plist-get properties prop)))
-          properties)
-    (puthash new-ov t ce--instructions)))
 
 (provide 'coderel)
 
