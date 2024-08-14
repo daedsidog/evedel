@@ -1,8 +1,11 @@
-* Evedel: Instructed LLM programmer
+* Evedel: Instructed LLM programmer/assistant
 
 Evedel is a [[https://github.com/karthink/gptel][gptel]] extension Emacs package specialized for ergonomic programming with an LLM.
 
-Evedel aims to shift the programmer from manually writing code to instead write instructions for the model on how to write the code.
+Evedel aims to shift the programmer's workload from manually writing code to instead write
+instructions for the model on how to write the code.
+
+Evedel can also be used in non-programming buffers.
 
 ** Acknowledgments
 
