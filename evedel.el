@@ -88,7 +88,7 @@ the internal bookkeeping."
 (defun eel-create-or-delete-reference ()
   "Create a reference instruction within the selected region.
 
-If no region is selected, deletes the reference at the current point."
+If no region is selected, deletes the reference at the current point, if any."
   (interactive)
   (if (use-region-p)
       (let ((instruction (eel--create-reference-in-region (current-buffer)
@@ -146,6 +146,24 @@ If no region is selected, deletes the reference at the current point."
               (eel--restore-overlay (current-buffer) overlay-start overlay-end properties))
             (cl-incf restored)))))
       (message "Restored %d out of %d Evedel instructions" restored total))))
+
+;;;###autoload
+(defun eel-create-or-delete-directive ()
+  "Create a directive instruction within the selected region.
+
+If no region is selected, deletes the directive at the current point, if any.
+
+If no region is selected and no directive is found at the point to remove, then
+then a bodyless directive will be created at the current point."
+  (interactive)
+  (if (use-region-p)
+      (let ((instruction (eel--create-directive-in-region (current-buffer)
+                                                          (region-beginning)
+                                                          (region-end))))
+        (deactivate-mark)
+        instruction)
+    (when-let ((instruction (car (eel--instructions-at-point (point) 'directive))))
+      (eel--delete-instruction instruction))))
 
 (defun eel-delete-instruction-at-point ()
   "Delete the instruction instruction at point."
@@ -222,7 +240,7 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
           (setq start (min start (overlay-start ov)))
           (setq end (max end (overlay-end ov))))
         (mapc #'eel--delete-instruction partially-contained-instructions)
-        (let ((overlay (make-overlay start end nil nil t)))
+        (let ((overlay (make-overlay start end)))
           (overlay-put overlay 'eel-instruction t)
           (overlay-put overlay 'evaporate t)
           (puthash overlay t eel--instructions)
@@ -271,6 +289,13 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
     (eel--update-instruction-overlay ov t)
     ov))
 
+(defun eel--create-directive-in-region (buffer start end)
+  "Create a region directive from START to END in BUFFER."
+  (let ((ov (eel--create-instruction-overlay-in-region buffer start end)))
+    (overlay-put ov 'eel-instruction-type 'directive)
+    (eel--update-instruction-overlay ov t)
+    ov))
+
 (defun eel--delete-instruction (instruction)
   "Delete the INSTRUCTION overlay."
   (let ((children (eel--child-instructions instruction)))
@@ -310,13 +335,16 @@ non-nil."
               (if (and parent
                        (eq (eel--instruction-type parent) 'reference))
                   (setq label "SUBREFERENCE")
-                (setq label   "REFERENCE")))
+                (setq label "REFERENCE")))
              ('directive ; DIRECTIVE
-              (setq color eel-directive-color
-                    label     "DIRECTIVE"))
+              (setq color eel-directive-color)
+              (if (and parent
+                       (eq (eel--instruction-type parent) 'directive))
+                  (setq label "SUBDIRECTIVE")
+                (setq label "DIRECTIVE")))
              ('result    ; RESULT
               (setq color eel-result-color
-                    label     "RESULT")))
+                    label "RESULT")))
            (let* ((parent-label-color
                   (if parent
                       (overlay-get parent 'eel-label-color)
@@ -333,13 +361,10 @@ non-nil."
              (overlay-put instruction 'eel-label-color label-color)
              (overlay-put instruction 'priority priority)
              (overlay-put instruction
-                          'before-string
-                          (concat "\n"
-                                  (propertize
-                                   (concat label "\n")
-                                   'face (list :extend t
-                                               :foreground label-color
-                                               :background bg-color))))
+                          'before-string (propertize (concat label "\n")
+                                                     'face (list :extend t
+                                                                 :foreground label-color
+                                                                 :background bg-color)))
              (overlay-put instruction
                           'face
                           `(:extend t :background ,bg-color))))
@@ -406,15 +431,23 @@ Does not return instructions that contain the region in its entirety the region.
   (let ((instructions (eel--foreach-instruction inst
                         collect (list :start (overlay-start inst)
                                       :end (overlay-end inst)
-                                      :buffer inst
-                                      :type (evedel--instruction-type inst)))))
+                                      :buffer (overlay-buffer inst)
+                                      :type (evedel--instruction-type inst))))
+        (recreated 0))
     (eel-delete-all-instructions)
     (dolist (instruction instructions)
       (cl-destructuring-bind (&key start end buffer type) instruction
-        (when (equal type 'reference)
-          (eel--create-reference-in-region buffer start end)))))
-  (when (called-interactively-p 'interactive)
-    (message "Recreated Evedel instructions")))
+        (pcase type
+          ('reference
+           (eel--create-reference-in-region buffer start end)
+           (cl-incf recreated))
+          ('directive
+           (eel--create-directive-in-region buffer start end)
+           (cl-incf recreated)))))
+    (when (called-interactively-p 'interactive)
+      (message "Recreated %d out of %d Evedel instructions"
+               recreated
+             (length instructions)))))
 
 (provide 'evedel)
 
