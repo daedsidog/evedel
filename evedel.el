@@ -62,6 +62,28 @@
 (defvar eel--instructions (make-hash-table))
 (defvar eel--default-instruction-priority -99)
 
+(defmacro eel--foreach-instruction (instruction-binding &rest body)
+  "Iterate over `eel--instructions' with INSTRUCTION-BINDING as the binding.
+
+Executes BODY inside a `cl-loop' form.
+
+The purpose of this macro is to be able to iterate over instructions while also
+making sure that the iterated instructions are valid, i.e. have an associated
+buffer to the overlay.
+
+This macro is the preferred way to iterate over instructions, as it handles all
+the internal bookkeeping."
+  (declare (indent 1))
+  (cl-with-gensyms (marked-for-deletion malformed-inst)
+    `(let ((,marked-for-deletion ()))
+       (prog1 (cl-loop for ,instruction-binding being the hash-keys of eel--instructions
+                       if (overlay-buffer ,instruction-binding)
+                       ,@body
+                       else do (push ,instruction-binding ,marked-for-deletion)
+                       end)
+         (cl-loop for ,malformed-inst in ,marked-for-deletion
+                  do (remhash ,malformed-inst eel--instructions))))))
+
 ;;;###autoload
 (defun eel-create-or-delete-reference ()
   "Create a reference instruction within the selected region.
@@ -81,33 +103,26 @@ If no region is selected, deletes the reference at the current point."
 (defun eel-save-instructions (path)
   "Save instructions overlays to a file PATH specified by the user."
   (interactive (list (read-file-name "Save instruction list to file: ")))
-  (let* ((overlays (hash-table-keys eel--instructions))
-         (saved-instructions ()))
-    (dolist (ov overlays)
-      (when (overlay-get ov 'eel-instruction-type)
-        (let* ((buf (overlay-buffer ov))
-               (file (buffer-file-name buf))
-               (buf-name (buffer-name buf)))
-          (when buf
-            (push (list :file file
-                        :buffer buf-name
-                        :overlay-start (overlay-start ov)
-                        :overlay-end (overlay-end ov)
-                        :properties (overlay-properties ov))
-                  saved-instructions)))))
-    (with-temp-file path
-      (prin1 saved-instructions (current-buffer))
-      (message "Saved Evedel instructions to %s" path))))
+  (let ((saved-instructions (eel--foreach-instruction inst
+                              collect (list :file (buffer-file-name (overlay-buffer inst))
+                                            :buffer (buffer-name (overlay-buffer inst))
+                                            :overlay-start (overlay-start inst)
+                                            :overlay-end (overlay-end inst)
+                                            :properties (overlay-properties inst)))))
+    (if saved-instructions
+        (with-temp-file path
+          (prin1 saved-instructions (current-buffer))
+          (message "Saved %d Evedel instruction%s to %s"
+                   (length saved-instructions)
+                   (if (= 1 (length saved-instructions)) "" "s")
+                   path))
+      (message "No Evedel instructions to save"))))
 
 ;;;###autoload
 (defun eel-load-instructions (path)
   "Load instruction overlays from a file specified by PATH."
   (interactive (list (read-file-name "Instruction list file: ")))
-  (cl-loop for ov being the hash-keys of eel--instructions
-           unless (and (overlay-buffer ov)
-                       (overlay-get ov 'eel-instruction-type))
-           do (remhash ov eel--instructions))
-  (when (and (not (zerop (hash-table-count eel--instructions)))
+  (when (and (eel--instructions)
              (called-interactively-p 'interactive))
     (unless (y-or-n-p "Discard existing Evedel instructions? ")
       (user-error "Aborted")))
@@ -116,8 +131,7 @@ If no region is selected, deletes the reference at the current point."
                                 (read (current-buffer)))))
     (unless (listp loaded-instructions)
       (user-error "Malformed Evedel instruction list"))
-    (maphash (lambda (ov _val) (delete-overlay ov)) eel--instructions)
-    (setq eel--instructions (make-hash-table))
+    (eel-delete-all-instructions)
     (let ((total (length loaded-instructions))
           (restored 0))
       (dolist (instr loaded-instructions)
@@ -141,6 +155,28 @@ If no region is selected, deletes the reference at the current point."
          (target (eel--highest-priority-instruction instructions)))
     (when target
       (eel--delete-instruction target))))
+
+(defun eel-delete-all-instructions ()
+  "Delete all Evedel instructions."
+  (interactive)
+  (let ((instructions (eel--instructions))
+        buffers)
+    (when (or (not (called-interactively-p 'interactive))
+              (and (called-interactively-p 'interactive)
+                   instructions
+                   (y-or-n-p "Are you sure you want to delete all instructions?")))
+      (when (called-interactively-p 'interactive)
+        (setq buffers (cl-remove-duplicates (mapcar #'overlay-buffer instructions))))
+      (mapc #'eel--delete-instruction instructions)
+      (clrhash eel--instructions)
+      (when (and instructions buffers)
+        (let ((instruction-count (length instructions))
+              (buffer-count (length buffers)))
+          (message "Deleted %d Evedel instruction%s in %d buffer%s"
+                   instruction-count
+                   (if (= 1 instruction-count) "" "s")
+                   buffer-count
+                   (if (= 1 buffer-count) "" "s")))))))
 
 (defun eel--tint (source-color-name tint-color-name &optional intensity)
   "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
@@ -188,6 +224,7 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
         (mapc #'eel--delete-instruction partially-contained-instructions)
         (let ((overlay (make-overlay start end nil nil t)))
           (overlay-put overlay 'eel-instruction t)
+          (overlay-put overlay 'evaporate t)
           (puthash overlay t eel--instructions)
           overlay)))))
 
@@ -230,7 +267,6 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
 (defun eel--create-reference-in-region (buffer start end)
   "Create a region reference from START to END in BUFFER."
   (let ((ov (eel--create-instruction-overlay-in-region buffer start end)))
-    (overlay-put ov 'evaporate t)
     (overlay-put ov 'eel-instruction-type 'reference)
     (eel--update-instruction-overlay ov t)
     ov))
@@ -359,6 +395,26 @@ Does not return instructions that contain the region in its entirety the region.
                              (not (and (<= (overlay-start ov) start)
                                        (>= (overlay-end ov) end)))))
                       (overlays-in start end))))
+
+(defun eel--instructions ()
+  "Return a list of all Evedel instructions."
+  (eel--foreach-instruction inst collect inst))
+
+(defun eel--recreate-instructions ()
+  "Recreate all instructions.  Used for debugging purposes."
+  (interactive)
+  (let ((instructions (eel--foreach-instruction inst
+                        collect (list :start (overlay-start inst)
+                                      :end (overlay-end inst)
+                                      :buffer inst
+                                      :type (evedel--instruction-type inst)))))
+    (eel-delete-all-instructions)
+    (dolist (instruction instructions)
+      (cl-destructuring-bind (&key start end buffer type) instruction
+        (when (equal type 'reference)
+          (eel--create-reference-in-region buffer start end)))))
+  (when (called-interactively-p 'interactive)
+    (message "Recreated Evedel instructions")))
 
 (provide 'evedel)
 
