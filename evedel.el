@@ -96,7 +96,8 @@ If no region is selected, deletes the reference at the current point, if any."
                                                          (region-end))))
         (deactivate-mark)
         instruction)
-    (when-let ((instruction (car (eel--instructions-at-point (point) 'reference))))
+    (when-let ((instruction (eel--highest-priority-instruction
+                             (eel--instructions-at-point (point) 'reference))))
       (eel--delete-instruction instruction))))
 
 ;;;###autoload
@@ -162,7 +163,8 @@ then a bodyless directive will be created at the current point."
                                                           (region-end))))
         (deactivate-mark)
         instruction)
-    (when-let ((instruction (car (eel--instructions-at-point (point) 'directive))))
+    (when-let ((instruction (eel--highest-priority-instruction
+                             (eel--instructions-at-point (point) 'directive))))
       (eel--delete-instruction instruction))))
 
 (defun eel-delete-instruction-at-point ()
