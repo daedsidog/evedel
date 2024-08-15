@@ -397,10 +397,12 @@ non-nil."
              (overlay-put instruction 'eel-label-color label-color)
              (overlay-put instruction 'priority priority)
              (overlay-put instruction
-                          'before-string (propertize (concat label "\n")
-                                                     'face (list :extend t
-                                                                 :foreground label-color
-                                                                 :background bg-color)))
+                          'before-string (concat "\n"
+                                                 (propertize (concat label "\n")
+                                                             'face (list :extend t
+                                                                         :inherit 'default
+                                                                         :foreground label-color
+                                                                         :background bg-color))))
              (overlay-put instruction
                           'face
                           `(:extend t :background ,bg-color))))
