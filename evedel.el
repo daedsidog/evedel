@@ -5,7 +5,7 @@
 ;; Author: daedsidog <contact@daedsidog.com>
 ;; Version: 0.0.1
 ;; Keywords: convenience, tools
-;; Package-Requires: ((emacs "27.1") (gptel "0.9.0"))
+;; Package-Requires: ((emacs "27.1") (gptel "0.9.0") (transient "0.4.0"))
 ;; URL: https://github.com/daedsidog/evedel
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -85,22 +85,6 @@ the internal bookkeeping."
                   do (remhash ,malformed-inst eel--instructions))))))
 
 ;;;###autoload
-(defun eel-create-or-delete-reference ()
-  "Create a reference instruction within the selected region.
-
-If no region is selected, deletes the reference at the current point, if any."
-  (interactive)
-  (if (use-region-p)
-      (let ((instruction (eel--create-reference-in-region (current-buffer)
-                                                         (region-beginning)
-                                                         (region-end))))
-        (deactivate-mark)
-        instruction)
-    (when-let ((instruction (eel--highest-priority-instruction
-                             (eel--instructions-at-point (point) 'reference))))
-      (eel--delete-instruction instruction))))
-
-;;;###autoload
 (defun eel-save-instructions (path)
   "Save instructions overlays to a file PATH specified by the user."
   (interactive (list (read-file-name "Save instruction list to file: ")))
@@ -153,24 +137,76 @@ If no region is selected, deletes the reference at the current point, if any."
             (cl-incf restored)))))
       (message "Restored %d out of %d Evedel instructions" restored total))))
 
+(defun eel--create-or-delete-instruction (type)
+  "Create or delete an instruction of the given TYPE within the selected region.
+
+If no region is selected, deletes the instruction at the current point, if any.
+
+If a region is selected but partially covers an existing instruction, then the
+function will resize it.  See either `evedel-create-or-delete-reference' or
+`evedel-create-or-delete-directive' for details on how the resizing works."
+  (if (use-region-p)
+      (if-let ((instructions
+                (cl-remove-if-not (lambda (inst)
+                                    (eq (eel--instruction-type inst) type))
+                                  (eel--partially-contained-instructions (current-buffer)
+                                                                         (region-beginning)
+                                                                         (region-end)))))
+          (progn
+            (dolist (instruction instructions)
+              (if (< (overlay-start instruction) (point) (overlay-end instruction))
+                  (if (< (mark) (point))
+                      (setf (overlay-start instruction) (point))
+                    (setf (overlay-end instruction) (point)))
+                (if (> (mark) (point))
+                    (setf (overlay-start instruction) (point))
+                  (setf (overlay-end instruction) (point)))))
+            (when instructions
+              (deactivate-mark)))
+        (let ((instruction (if (eq type 'reference)
+                               (eel--create-reference-in-region (current-buffer)
+                                                                (region-beginning)
+                                                                (region-end))
+                             (eel--create-directive-in-region (current-buffer)
+                                                              (region-beginning)
+                                                              (region-end)))))
+          (deactivate-mark)
+          instruction))
+    (when-let ((instruction (eel--highest-priority-instruction
+                             (eel--instructions-at-point (point) type))))
+      (eel--delete-instruction instruction))))
+
+;;;###autoload
+(defun eel-create-or-delete-reference ()
+  "Create a reference instruction within the selected region.
+
+If no region is selected, deletes the reference at the current point, if any.
+
+If a region is selected but partially covers an existing reference, then the
+command will instead resize the reference in the following manner:
+
+  - If the mark is located INSIDE the reference (i.e., the point is located
+    OUTSIDE the reference) then the reference will be expanded to the point.
+  - If the mark is located OUTSIDE the reference (i.e., the point is located
+    INSIDE the reference) then the reference will be shrunk to the point."
+  (interactive)
+  (eel--create-or-delete-instruction 'reference))
+
 ;;;###autoload
 (defun eel-create-or-delete-directive ()
   "Create a directive instruction within the selected region.
 
 If no region is selected, deletes the directive at the current point, if any.
 
-If no region is selected and no directive is found at the point to remove, then
-then a bodyless directive will be created at the current point."
+If a region is selected but partially covers an existing directive, then the
+command will instead resize the directive in the following manner:
+
+  - If the mark is located INSIDE the directive (i.e., the point is located
+    OUTSIDE the directive) then the directive will be expanded to the point.
+  - If the mark is located OUTSIDE the directive (i.e., the point is located
+    INSIDE the directive) then the directive will be shrunk to the point."
   (interactive)
-  (if (use-region-p)
-      (let ((instruction (eel--create-directive-in-region (current-buffer)
-                                                          (region-beginning)
-                                                          (region-end))))
-        (deactivate-mark)
-        instruction)
-    (when-let ((instruction (eel--highest-priority-instruction
-                             (eel--instructions-at-point (point) 'directive))))
-      (eel--delete-instruction instruction))))
+  (eel--create-or-delete-instruction 'directive))
 
 (defun eel-delete-instruction-at-point ()
   "Delete the instruction instruction at point."
@@ -240,18 +276,11 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
 (defun eel--create-instruction-overlay-in-region (buffer start end)
   "Create an overlay in BUFFER from START to END of the lines."
   (with-current-buffer buffer
-    (save-excursion
-      (let ((partially-contained-instructions
-             (eel--partially-contained-instructions buffer start end)))
-        (dolist (ov partially-contained-instructions)
-          (setq start (min start (overlay-start ov)))
-          (setq end (max end (overlay-end ov))))
-        (mapc #'eel--delete-instruction partially-contained-instructions)
-        (let ((overlay (make-overlay start end)))
-          (overlay-put overlay 'eel-instruction t)
-          (overlay-put overlay 'evaporate t)
-          (puthash overlay t eel--instructions)
-          overlay)))))
+    (let ((overlay (make-overlay start end)))
+      (overlay-put overlay 'eel-instruction t)
+      (overlay-put overlay 'evaporate t)
+      (puthash overlay t eel--instructions)
+      overlay)))
 
 (defun eel--instruction-p (overlay)
   "Return non-nil if OVERLAY is an instruction overlay."
@@ -414,6 +443,18 @@ Optionally return only instructions of specific TYPE."
                                         type))
                                t)))
                     (overlays-at point)))
+
+(defun eel--instructions-in-region (start end &optional type)
+  "Return a list of instructions in region delimited by START and END.
+
+Optionally return only instructions of specific TYPE."
+  (cl-remove-if-not (lambda (ov)
+                      (and (overlay-get ov 'eel-instruction)
+                           (or (and type
+                                    (eq (overlay-get ov 'eel-instruction-type)
+                                        type))
+                               t)))
+                    (overlays-in start end)))
 
 (defun eel--partially-contained-instructions (buffer start end)
   "Return instructions in BUFFER that overlap with START and END.
