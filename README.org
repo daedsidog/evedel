@@ -1,14 +1,40 @@
 * Evedel: Instructed LLM programmer/assistant
 
-Evedel is a [[https://github.com/karthink/gptel][gptel]] extension Emacs package specialized for ergonomic programming with an LLM.
-
-Evedel aims to shift the programmer's workload from manually writing code to instead write
-instructions for the model on how to write the code.
+Evedel is a [[https://github.com/karthink/gptel][gptel]] extension Emacs package specialized for ergonomic programming with an LLM. The
+goal is to shift the programmer's workload from manually writing code to instead write detailed,
+thought-out instructions for the model on how to write the code, while supplying it with references
+so that it may better understand the working environment.
 
 Evedel can also be used in non-programming buffers.
+
+** Usage
+
+The most straightforward way to use this package is creating what is known as references and
+directives. Directives are the prompts you send to the model, and references are extra information
+that is propagated to the model in order to complete the directive.
+
+*** References
+
+You can create references by selecting a region of text inside a buffer and invoking the DWIM
+=evedel-create-or-delete-reference= command. You may have nested references.
+
+Invoking this command without a region selected will try to erase the "top-layer" reference at the
+point.
+
+*** Directives
+
+You can create directives by selecting a region of text inside a buffer and invoking the DWIM
+=evedel-create-or-delete-directive= command. You may have nested directives.
+
+Invoking this command without a region selected will try to erase the "top-layer" directive at the
+point.
+
+Invoking this command without a region selected and not having a directive under the point will
+instead create a directive with an empty body.
 
 ** Acknowledgments
 
 - [[https://github.com/karthink][Karthik Chikmagalur]] for the [[https://github.com/karthink/gptel][gptel]] package
+- [[https://github.com/tarsius][Jonas Bernoulli]] for the [[https://github.com/magit/transient][Transient]] library
 
-#  LocalWords:  LLM Evedel
+#  LocalWords:  LLM Evedel DWIM
