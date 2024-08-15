@@ -113,10 +113,15 @@ If no region is selected, deletes the reference at the current point, if any."
     (if saved-instructions
         (with-temp-file path
           (prin1 saved-instructions (current-buffer))
-          (message "Saved %d Evedel instruction%s to %s"
-                   (length saved-instructions)
-                   (if (= 1 (length saved-instructions)) "" "s")
-                   path))
+          (let ((buffer-count (length (cl-remove-duplicates (mapcar (lambda (inst)
+                                                                      (plist-get :buffer inst))
+                                                                    saved-instructions)))))
+            (message "Saved %d Evedel instruction%s from %d buffer%s to %s"
+                     (length saved-instructions)
+                     (if (= 1 (length saved-instructions)) "" "s")
+                     buffer-count
+                     (if (= 1 buffer-count) "" "s")
+                     path)))
       (message "No Evedel instructions to save"))))
 
 ;;;###autoload
