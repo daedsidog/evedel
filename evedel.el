@@ -273,6 +273,26 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
       type
     (error "%s is not an instruction overlay" instruction)))
 
+(defun eel--update-instruction-newline-prefix (instruction)
+  "Update the INSTRUCTION label prefix so it appears at the start of the line."
+  (let ((before-string (overlay-get instruction 'before-string)))
+    (with-current-buffer (overlay-buffer instruction)
+      (save-excursion
+        (goto-char (overlay-start instruction))
+        (if (not (eq (point) (line-beginning-position)))
+            (unless (string-prefix-p "\n" before-string)
+              (overlay-put instruction 'before-string (concat "\n" before-string)))
+          (when (string-prefix-p "\n" before-string)
+            (overlay-put instruction 'before-string (substring before-string 1))))))))
+
+(defun eel--update-instructions-in-region (beg end _len)
+  "Fix up instruction overlays between BEG and END in the buffer."
+  (let ((beg (max (point-min) (1- beg)))
+        (end (min (point-max) (1+ end))))
+    (let ((affected-instructions (eel--instructions-in-region beg end)))
+      (dolist (instruction affected-instructions)
+        (eel--update-instruction-newline-prefix instruction)))))
+
 (defun eel--create-instruction-overlay-in-region (buffer start end)
   "Create an overlay in BUFFER from START to END of the lines."
   (with-current-buffer buffer
@@ -280,6 +300,10 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
       (overlay-put overlay 'eel-instruction t)
       (overlay-put overlay 'evaporate t)
       (puthash overlay t eel--instructions)
+      (unless (member 'eel--update-instruction-prefixes-in-region
+                      after-change-functions)
+        (add-hook 'after-change-functions
+                  'eel--update-instruction-prefixes-in-region nil t))
       overlay)))
 
 (defun eel--instruction-p (overlay)
@@ -347,6 +371,13 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
         (overlay-put child 'eel-label-color 'default))
       (eel--update-instruction-overlay child t))))
 
+(defun eel--pos-bol-p (pos buffer)
+  "Return nil if POS is not a beginning of a line in BUFFER."
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char pos)
+      (= pos (pos-bol)))))
+
 (defun eel--update-instruction-overlay (instruction &optional update-children)
   "Update the appearance of the INSTRUCTION overlay.
 
@@ -397,12 +428,12 @@ non-nil."
              (overlay-put instruction 'eel-label-color label-color)
              (overlay-put instruction 'priority priority)
              (overlay-put instruction
-                          'before-string (concat "\n"
-                                                 (propertize (concat label "\n")
-                                                             'face (list :extend t
-                                                                         :inherit 'default
-                                                                         :foreground label-color
-                                                                         :background bg-color))))
+                          'before-string (propertize (concat label "\n")
+                                                     'face (list :extend t
+                                                                 :inherit 'default
+                                                                 :foreground label-color
+                                                                 :background bg-color)))
+             (eel--update-instruction-newline-prefix instruction)
              (overlay-put instruction
                           'face
                           `(:extend t :background ,bg-color))))
