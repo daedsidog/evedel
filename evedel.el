@@ -356,6 +356,7 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
 This function switches to another buffer midway of execution."
   (let ((ov (eel--create-instruction-overlay-in-region buffer start end)))
     (overlay-put ov 'eel-instruction-type 'directive)
+    (overlay-put ov 'eel-directive "")
     (eel--update-instruction-overlay ov t)
     (eel--directive-prompt ov) ; Switches to another buffer
     ov))
@@ -584,11 +585,11 @@ DIRECTIVE-INSTRUCTION is the overlay to associate with the buffer."
   (make-local-variable 'directive-overlay)
   (let* ((buffer (current-buffer))
          (string (buffer-string)))
-    (if (eel--nonempty-string-p string)
+    (if (string-empty-p string)
         ;; We don't need to update the overlay because it will already be updated from the
         ;; modification hook.
-        (overlay-put directive-overlay 'eel-directive string)
-      (eel--delete-instruction directive-overlay))
+        (eel--delete-instruction directive-overlay)
+      (overlay-put directive-overlay 'eel-directive string))
     (setq-local buffer-killable t)
     (delete-window)
     (kill-buffer buffer)))
@@ -599,19 +600,14 @@ DIRECTIVE-INSTRUCTION is the overlay to associate with the buffer."
   (make-local-variable 'original-directive)
   (make-local-variable 'directive-overlay)
   (let ((buffer (current-buffer)))
-    (if (eel--nonempty-string-p original-directive)
-        (progn
-          (overlay-put directive-overlay 'eel-directive original-directive)
-          (eel--update-instruction-overlay directive-overlay nil))
-      (eel--delete-instruction directive-overlay))
+    (if (string-empty-p original-directive)
+        (eel--delete-instruction directive-overlay)
+      (overlay-put directive-overlay 'eel-directive original-directive)
+      (eel--update-instruction-overlay directive-overlay nil))
     (setq-local buffer-killable t)
     (delete-window)
     (kill-buffer buffer)
     (user-error "Aborted")))
-
-(defun eel--nonempty-string-p (s)
-  "Return non-nil if S is both a string and not empty."
-  (and (stringp s) (not (string-empty-p s))))
 
 (provide 'evedel)
 
