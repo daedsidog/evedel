@@ -549,9 +549,14 @@ Does not return instructions that contain the region in its entirety the region.
   "Split current frame vertically by 1/3 and open a directive prompt buffer buffer.
 
 DIRECTIVE-INSTRUCTION is the overlay to associate with the buffer."
-  (let ((new-window (split-window-vertically (- (round (* 0.333 (window-total-height)))))))
-    (select-window new-window)
-    (switch-to-buffer "*evedel-directive-prompt*"))
+  (let ((prompt-buffer-name "*evedel-directive-prompt*"))
+    ;; Close an existing prompt buffer, if any.
+    (when (get-buffer prompt-buffer-name)
+      (switch-to-buffer prompt-buffer-name)
+      (eel--directive-abort-function t))
+    (let ((new-window (split-window-vertically (- (round (* 0.333 (window-total-height)))))))
+      (select-window new-window)
+      (switch-to-buffer prompt-buffer-name)))
   (text-mode)
   (setq-local directive-overlay directive-instruction)
   (setq-local buffer-killable nil)
@@ -594,8 +599,10 @@ DIRECTIVE-INSTRUCTION is the overlay to associate with the buffer."
     (delete-window)
     (kill-buffer buffer)))
 
-(defun eel--directive-abort-function ()
-  "Abort change made to the directive instruction."
+(defun eel--directive-abort-function (&optional no-error)
+  "Abort change made to the directive instruction.
+
+If NO-ERROR is non-nil, do not throw a user error."
   (interactive)
   (make-local-variable 'original-directive)
   (make-local-variable 'directive-overlay)
@@ -607,7 +614,8 @@ DIRECTIVE-INSTRUCTION is the overlay to associate with the buffer."
     (setq-local buffer-killable t)
     (delete-window)
     (kill-buffer buffer)
-    (user-error "Aborted")))
+    (unless no-error
+      (user-error "Aborted"))))
 
 (provide 'evedel)
 
