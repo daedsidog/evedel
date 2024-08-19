@@ -165,17 +165,24 @@ function will resize it.  See either `evedel-create-or-delete-reference' or
               (deactivate-mark)))
         (let* ((buffer (current-buffer))
                (instruction (if (eq type 'reference)
-                               (eel--create-reference-in-region buffer
-                                                                (region-beginning)
-                                                                (region-end))
-                             (eel--create-directive-in-region buffer
-                                                              (region-beginning)
-                                                              (region-end)))))
+                                (eel--create-reference-in-region buffer
+                                                                 (region-beginning)
+                                                                 (region-end))
+                              (eel--create-directive-in-region buffer
+                                                               (region-beginning)
+                                                               (region-end)))))
           (with-current-buffer buffer (deactivate-mark))
           instruction))
-    (when-let ((instruction (eel--highest-priority-instruction
-                             (eel--instructions-at-point (point) type))))
-      (eel--delete-instruction instruction))))
+    (if-let ((instruction (eel--highest-priority-instruction
+                           ;; We use a region detection in order to be able to also delete bodyless
+                           ;; instructions.
+                           (eel--instructions-in-region (point)
+                                                        (min (point-max) (1+ (point)))
+                                                        type))))
+        (eel--delete-instruction instruction)
+      (when (eq type 'directive)
+        (prog1 (eel--create-directive-in-region (current-buffer) (point) (point) t)
+          (deactivate-mark))))))
 
 ;;;###autoload
 (defun eel-create-or-delete-reference ()
@@ -213,7 +220,7 @@ command will instead resize the directive in the following manner:
   "Delete the instruction instruction at point."
   (interactive)
   (let* ((instructions (seq-filter (lambda (ov) (overlay-get ov 'eel-instruction))
-                               (overlays-at (point))))
+                                   (overlays-at (point))))
          (target (eel--highest-priority-instruction instructions)))
     (when target
       (eel--delete-instruction target))))
@@ -274,37 +281,23 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
       type
     (error "%s is not an instruction overlay" instruction)))
 
-(defun eel--update-instruction-newline-prefix (instruction)
-  "Update the INSTRUCTION label prefix so it appears at the start of the line."
-  (let ((before-string (overlay-get instruction 'before-string)))
-    (with-current-buffer (overlay-buffer instruction)
-      (save-excursion
-        (goto-char (overlay-start instruction))
-        (if (not (eq (point) (line-beginning-position)))
-            (unless (string-prefix-p "\n" before-string)
-              (overlay-put instruction 'before-string (concat "\n" before-string)))
-          (when (string-prefix-p "\n" before-string)
-            (overlay-put instruction 'before-string (substring before-string 1))))))))
-
-(defun eel--update-instruction-newline-prefixes-in-region (beg end _len)
-  "Fix up instruction overlay newline prefixes between BEG and END in the buffer."
-  (let ((beg (max (point-min) (1- beg)))
-        (end (min (point-max) (1+ end))))
-    (let ((affected-instructions (eel--instructions-in-region beg end)))
-      (dolist (instruction affected-instructions)
-        (eel--update-instruction-newline-prefix instruction)))))
-
 (defun eel--create-instruction-overlay-in-region (buffer start end)
   "Create an overlay in BUFFER from START to END of the lines."
+  (make-local-variable 'eel--after-change-functions-hooked)
   (with-current-buffer buffer
     (let ((overlay (make-overlay start end)))
       (overlay-put overlay 'eel-instruction t)
-      (overlay-put overlay 'evaporate t)
       (puthash overlay t eel--instructions)
-      (unless (member 'eel--update-instruction-newline-prefixes-in-region
-                      after-change-functions)
+      (unless (bound-and-true-p eel--after-change-functions-hooked)
+        (setq-local eel--after-change-functions-hooked t)
         (add-hook 'after-change-functions
-                  'eel--update-instruction-newline-prefixes-in-region nil t))
+                  (lambda (beg end _len)
+                    (let ((beg (max (point-min) (1- beg)))
+                          (end (min (point-max) (1+ end))))
+                      (let ((affected-instructions (eel--instructions-in-region beg end)))
+                        (dolist (instruction affected-instructions)
+                          (eel--update-instruction-overlay instruction)))))
+                  nil t))
       overlay)))
 
 (defun eel--instruction-p (overlay)
@@ -332,12 +325,15 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
                     max-end ov-end))))))
     smallest-overlay))
 
-(defun eel--child-instructions (instruction)
+(cl-defun eel--child-instructions (instruction)
   "Return the child instructions of the given INSTRUCTION overlay."
+  ;; Bodyless instructions cannot have any children.
+  (when (overlay-get instruction 'eel-bodyless)
+    (cl-return-from eel--child-instructions nil))
   (let ((children (remove instruction
                           (eel--wholly-contained-instructions (overlay-buffer instruction)
-                                                             (overlay-start instruction)
-                                                             (overlay-end instruction)))))
+                                                              (overlay-start instruction)
+                                                              (overlay-end instruction)))))
     (dolist (child children)
       (setq children (cl-set-difference children
                                         (eel--child-instructions child))))
@@ -347,17 +343,22 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
   "Create a region reference from START to END in BUFFER."
   (let ((ov (eel--create-instruction-overlay-in-region buffer start end)))
     (overlay-put ov 'eel-instruction-type 'reference)
+    (overlay-put ov 'evaporate t)
     (eel--update-instruction-overlay ov t)
     ov))
 
-(defun eel--create-directive-in-region (buffer start end)
+(defun eel--create-directive-in-region (buffer start end &optional bodyless)
   "Create a region directive from START to END in BUFFER.
 
-This function switches to another buffer midway of execution."
+This function switches to another buffer midway of execution.
+BODYLESS controls special formatting if non-nil."
   (let ((ov (eel--create-instruction-overlay-in-region buffer start end)))
+    (if bodyless
+        (overlay-put ov 'eel-bodyless t)
+      (overlay-put ov 'evaporate t))
     (overlay-put ov 'eel-instruction-type 'directive)
     (overlay-put ov 'eel-directive "")
-    (eel--update-instruction-overlay ov t)
+    (eel--update-instruction-overlay ov (not bodyless))
     (eel--directive-prompt ov) ; Switches to another buffer
     ov))
 
@@ -398,8 +399,8 @@ non-nil."
   (cl-labels
       ((aux (instruction &optional update-children priority (parent nil))
          (let ((instruction-type (eel--instruction-type instruction))
-               (color)
-               (label))
+               color
+               label)
            ;; Instruction-specific updates
            (pcase instruction-type
              ('reference ; REFERENCE
@@ -415,7 +416,7 @@ non-nil."
                   (setq label "SUBDIRECTIVE")
                 (setq label "DIRECTIVE"))
               (let ((directive (overlay-get instruction 'eel-directive)))
-                (if (zerop (length directive))
+                (if (string-empty-p directive)
                     (setq label (concat "EMPTY " label))
                   (let ((buffer-fill-column (with-current-buffer (overlay-buffer instruction)
                                               fill-column)))
@@ -428,27 +429,44 @@ non-nil."
               (setq color eel-result-color
                     label "RESULT")))
            (let* ((parent-label-color
-                  (if parent
-                      (overlay-get parent 'eel-label-color)
-                    (face-foreground 'default)))
-                 (parent-bg-color
-                  (if parent
-                      (overlay-get parent 'eel-bg-color)
-                    (face-background 'default)))
-                 (label-color (eel--tint parent-label-color
-                                        color
-                                        eel-instruction-label-tint-intensity))
-                 (bg-color (eel--tint parent-bg-color color eel-instruction-bg-tint-intensity)))
+                   (if parent
+                       (overlay-get parent 'eel-label-color)
+                     (face-foreground 'default)))
+                  (parent-bg-color
+                   (if parent
+                       (overlay-get parent 'eel-bg-color)
+                     (face-background 'default)))
+                  (label-color (eel--tint parent-label-color
+                                          color
+                                          eel-instruction-label-tint-intensity))
+                  (bg-color (eel--tint parent-bg-color color eel-instruction-bg-tint-intensity)))
              (overlay-put instruction 'eel-bg-color bg-color)
              (overlay-put instruction 'eel-label-color label-color)
              (overlay-put instruction 'priority priority)
-             (overlay-put instruction
-                          'before-string (propertize (concat label "\n")
-                                                     'face (list :extend t
-                                                                 :inherit 'default
-                                                                 :foreground label-color
-                                                                 :background bg-color)))
-             (eel--update-instruction-newline-prefix instruction)
+             (let (instruction-is-at-eol
+                   instruction-is-at-bol)
+               (with-current-buffer (overlay-buffer instruction)
+                 (save-excursion
+                   (goto-char (overlay-end instruction))
+                   (setq instruction-is-at-eol (= (point) (pos-eol)))
+                   (goto-char (overlay-start instruction))
+                   (setq instruction-is-at-bol (= (point) (pos-bol)))))
+               (overlay-put instruction
+                            'before-string
+                            (concat (unless instruction-is-at-bol "\n")
+                                    (propertize (concat label
+                                                        ;; Instructions without a body (such as
+                                                        ;; bodyless directives) look nicer without a
+                                                        ;; newline character after the label.
+                                                        (if (overlay-get instruction
+                                                                         'eel-bodyless)
+                                                            (unless instruction-is-at-eol
+                                                              "\n")
+                                                          "\n"))
+                                                'face (list :extend t
+                                                            :inherit 'default
+                                                            :foreground label-color
+                                                            :background bg-color)))))
              (overlay-put instruction
                           'face
                           `(:extend t :background ,bg-color))))
@@ -558,26 +576,26 @@ DIRECTIVE-INSTRUCTION is the overlay to associate with the buffer."
       (select-window new-window)
       (switch-to-buffer prompt-buffer-name)))
   (text-mode)
-  (setq-local directive-overlay directive-instruction)
-  (setq-local buffer-killable nil)
-  (setq-local original-directive (overlay-get directive-instruction 'eel-directive))
-  (unless (zerop (length original-directive))
-    (insert original-directive))
+  (setq-local eel--directive-overlay directive-instruction)
+  (setq-local eel--buffer-killable nil)
+  (setq-local eel--original-directive (overlay-get directive-instruction 'eel-directive))
+  (unless (zerop (length eel--original-directive))
+    (insert eel--original-directive))
   (setq header-line-format
         (concat " Write the directive to the LLM.  "
                 (propertize "C-c C-c" 'face 'help-key-binding) ": apply, "
                 (propertize "C-c C-k" 'face 'help-key-binding) ": abort."))
   (setq-local kill-buffer-query-functions
               (list (lambda ()
-                      (if (not buffer-killable)
+                      (if (not eel--buffer-killable)
                           (user-error (concat "Do not kill this buffer.  Use "
                                               (propertize "C-c C-k" 'face 'help-key-binding)
                                               " to abort"))
                         t))))
   (add-hook 'after-change-functions
             (lambda (_beg _end _len)
-              (overlay-put directive-overlay 'eel-directive (buffer-string))
-              (eel--update-instruction-overlay directive-overlay))
+              (overlay-put eel--directive-overlay 'eel-directive (buffer-string))
+              (eel--update-instruction-overlay eel--directive-overlay))
             nil t)
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") 'eel--directive-apply-function)
@@ -587,15 +605,15 @@ DIRECTIVE-INSTRUCTION is the overlay to associate with the buffer."
 (defun eel--directive-apply-function ()
   "Apply change made to the directive instruction."
   (interactive)
-  (make-local-variable 'directive-overlay)
+  (make-local-variable 'eel--directive-overlay)
   (let* ((buffer (current-buffer))
          (string (buffer-string)))
     (if (string-empty-p string)
         ;; We don't need to update the overlay because it will already be updated from the
         ;; modification hook.
-        (eel--delete-instruction directive-overlay)
-      (overlay-put directive-overlay 'eel-directive string))
-    (setq-local buffer-killable t)
+        (eel--delete-instruction eel--directive-overlay)
+      (overlay-put eel--directive-overlay 'eel-directive string))
+    (setq-local eel--buffer-killable t)
     (delete-window)
     (kill-buffer buffer)))
 
@@ -604,14 +622,14 @@ DIRECTIVE-INSTRUCTION is the overlay to associate with the buffer."
 
 If NO-ERROR is non-nil, do not throw a user error."
   (interactive)
-  (make-local-variable 'original-directive)
-  (make-local-variable 'directive-overlay)
+  (make-local-variable 'eel--original-directive)
+  (make-local-variable 'eel--directive-overlay)
   (let ((buffer (current-buffer)))
-    (if (string-empty-p original-directive)
-        (eel--delete-instruction directive-overlay)
-      (overlay-put directive-overlay 'eel-directive original-directive)
-      (eel--update-instruction-overlay directive-overlay nil))
-    (setq-local buffer-killable t)
+    (if (string-empty-p eel--original-directive)
+        (eel--delete-instruction eel--directive-overlay)
+      (overlay-put eel--directive-overlay 'eel-directive eel--original-directive)
+      (eel--update-instruction-overlay eel--directive-overlay nil))
+    (setq-local eel--buffer-killable t)
     (delete-window)
     (kill-buffer buffer)
     (unless no-error
