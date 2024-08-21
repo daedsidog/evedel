@@ -173,12 +173,13 @@ function will resize it.  See either `evedel-create-or-delete-reference' or
                                                                (region-end)))))
           (with-current-buffer buffer (deactivate-mark))
           instruction))
+    ;; Else: no region is currently selected.
     (if-let ((instruction (e--highest-priority-instruction
                            ;; We use a region detection in order to be able to also delete bodyless
                            ;; instructions.
                            (e--instructions-in-region (point)
-                                                        (min (point-max) (1+ (point)))
-                                                        type))))
+                                                      (min (point-max) (1+ (point)))
+                                                      type))))
         (e--delete-instruction instruction)
       (when (eq type 'directive)
         (prog1 (e--create-directive-in-region (current-buffer) (point) (point) t)
@@ -507,7 +508,7 @@ Optionally return only instructions of specific TYPE."
                            (or (and type
                                     (eq (overlay-get ov 'e-instruction-type)
                                         type))
-                               t)))
+                               (null type))))
                     (overlays-at point)))
 
 (defun e--instructions-in-region (start end &optional type)
@@ -519,7 +520,7 @@ Optionally return only instructions of specific TYPE."
                            (or (and type
                                     (eq (overlay-get ov 'e-instruction-type)
                                         type))
-                               t)))
+                               (null type))))
                     (overlays-in start end)))
 
 (defun e--partially-contained-instructions (buffer start end)
