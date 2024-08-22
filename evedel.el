@@ -414,7 +414,7 @@ non-nil."
               (setq color e-directive-color)
               (if (and parent
                        (eq (e--instruction-type parent) 'directive))
-                  (setq label "SUBDIRECTIVE")
+                  (setq label "DIRECTIVE HINT")
                 (setq label "DIRECTIVE"))
               (let ((directive (overlay-get instruction 'e-directive)))
                 (if (string-empty-p directive)
