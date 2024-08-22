@@ -146,33 +146,39 @@ If a region is selected but partially covers an existing instruction, then the
 function will resize it.  See either `evedel-create-or-delete-reference' or
 `evedel-create-or-delete-directive' for details on how the resizing works."
   (if (use-region-p)
-      (if-let ((instructions
-                (cl-remove-if-not (lambda (inst)
-                                    (eq (e--instruction-type inst) type))
-                                  (e--partially-contained-instructions (current-buffer)
-                                                                         (region-beginning)
-                                                                         (region-end)))))
-          (progn
-            (dolist (instruction instructions)
-              (if (< (overlay-start instruction) (point) (overlay-end instruction))
-                  (if (< (mark) (point))
+      (let ((intersecting-instructions (e--partially-contained-instructions (current-buffer)
+                                                                            (region-beginning)
+                                                                            (region-end))))
+        (if-let ((instructions
+                  (cl-remove-if-not (lambda (inst)
+                                      (eq (e--instruction-type inst) type))
+                                    intersecting-instructions)))
+            (progn
+              (dolist (instruction instructions)
+                (if (< (overlay-start instruction) (point) (overlay-end instruction))
+                    (if (< (mark) (point))
+                        (setf (overlay-start instruction) (point))
+                      (setf (overlay-end instruction) (point)))
+                  (if (> (mark) (point))
                       (setf (overlay-start instruction) (point))
-                    (setf (overlay-end instruction) (point)))
-                (if (> (mark) (point))
-                    (setf (overlay-start instruction) (point))
-                  (setf (overlay-end instruction) (point)))))
-            (when instructions
-              (deactivate-mark)))
-        (let* ((buffer (current-buffer))
-               (instruction (if (eq type 'reference)
-                                (e--create-reference-in-region buffer
+                    (setf (overlay-end instruction) (point)))))
+              (when instructions
+                (deactivate-mark)))
+          ;; Else: there are no partially contained instructions of the same type within the
+          ;; region...
+          (when intersecting-instructions
+            ;; ...but there are intersecting instructions of another type, which is bad.
+            (user-error "Cannot add intersecting instructions of different types"))
+          (let* ((buffer (current-buffer))
+                 (instruction (if (eq type 'reference)
+                                  (e--create-reference-in-region buffer
                                                                  (region-beginning)
                                                                  (region-end))
-                              (e--create-directive-in-region buffer
+                                (e--create-directive-in-region buffer
                                                                (region-beginning)
                                                                (region-end)))))
-          (with-current-buffer buffer (deactivate-mark))
-          instruction))
+            (with-current-buffer buffer (deactivate-mark))
+            instruction)))
     ;; Else: no region is currently selected.
     (if-let ((instruction (e--highest-priority-instruction
                            ;; We use a region detection in order to be able to also delete bodyless
