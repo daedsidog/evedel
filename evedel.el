@@ -161,7 +161,8 @@ function will resize it.  See either `evedel-create-or-delete-reference' or
                       (setf (overlay-end instruction) (point)))
                   (if (> (mark) (point))
                       (setf (overlay-start instruction) (point))
-                    (setf (overlay-end instruction) (point)))))
+                    (setf (overlay-end instruction) (point))))
+                (e--update-instruction-overlay instruction))
               (when instructions
                 (deactivate-mark)))
           ;; Else: there are no partially contained instructions of the same type within the
