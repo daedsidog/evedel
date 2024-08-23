@@ -25,7 +25,7 @@
 
 ;;; Commentary:
 
-;; Evedel is a gptel extension Emacs package specialized for ergonomic programming with an LLM.  It
+;; Evedel is a GPTel extension Emacs package specialized for ergonomic programming with an LLM.  It
 ;; aims to eliminate manual aspects of software development by relegating them to an LLM.  The
 ;; programmer acts as an overseer over their LLM by creating various instruction overlays across
 ;; their project.
@@ -44,8 +44,18 @@
   :type 'string
   :group 'evedel)
 
-(defcustom e-result-color "cyan"
-  "Color to be used as a tint for result overlays."
+(defcustom e-directive-processing-color "cyan"
+  "Color to be used as a tint for directives being processed by the model."
+  :type 'string
+  :group 'evedel)
+
+(defcustom e-directive-success-color "green"
+  "Color to be used as a tint for directives successfully processed by the model."
+  :type 'string
+  :group 'evedel)
+
+(defcustom e-directive-error-color "red"
+  "Color to be used as a tint for directives the model could not process."
   :type 'string
   :group 'evedel)
 
@@ -224,6 +234,19 @@ command will instead resize the directive in the following manner:
   (interactive)
   (e--create-or-delete-instruction 'directive))
 
+(defun e-execute-directive-at-point ()
+  "Send the directive at point to the model via GPTel."
+  (interactive)
+  (when-let ((directive (car (e--instructions-at-point (point) 'directive))))
+    (e--execute-directive directive)))
+
+(defun e-execute-directives-in-region (beg end)
+  "Send directives between BEG and END to the model via GPTel."
+  (interactive "r")
+  (when-let ((directives (e--instructions-in-region beg end 'directive)))
+    (dolist (directive directives)
+      (e--execute-directive directive))))
+  
 (defun e-delete-instruction-at-point ()
   "Delete the instruction instruction at point."
   (interactive)
@@ -407,8 +430,8 @@ non-nil."
   (cl-labels
       ((aux (instruction &optional update-children priority (parent nil))
          (let ((instruction-type (e--instruction-type instruction))
-               color
-               label)
+               (label "")
+               color)
            ;; Instruction-specific updates
            (pcase instruction-type
              ('reference ; REFERENCE
@@ -418,11 +441,16 @@ non-nil."
                   (setq label "SUBREFERENCE")
                 (setq label "REFERENCE")))
              ('directive ; DIRECTIVE
-              (setq color e-directive-color)
-              (if (and parent
-                       (eq (e--instruction-type parent) 'directive))
-                  (setq label "DIRECTIVE HINT")
-                (setq label "DIRECTIVE"))
+              (let ((being-executed (overlay-get instruction 'e-being-executed)))
+                (if being-executed
+                    (setq color e-directive-processing-color)
+                  (setq color e-directive-color))
+                (if (and parent
+                         (eq (e--instruction-type parent) 'directive))
+                    (setq label "DIRECTIVE HINT")
+                  (when being-executed
+                    (setq label "PROCESSING\n"))
+                  (setq label (concat label "DIRECTIVE"))))
               (let ((directive (overlay-get instruction 'e-directive)))
                 (if (string-empty-p directive)
                     (setq label (concat "EMPTY " label))
@@ -432,10 +460,7 @@ non-nil."
                       (insert (concat label ": " directive))
                       (let ((fill-column buffer-fill-column))
                         (fill-region-as-paragraph (point-min) (point-max)))
-                      (setq label (buffer-string)))))))
-             ('result    ; RESULT
-              (setq color e-result-color
-                    label "RESULT")))
+                      (setq label (buffer-string))))))))
            (let* ((parent-label-color
                    (if parent
                        (overlay-get parent 'e-label-color)
@@ -643,10 +668,18 @@ If NO-ERROR is non-nil, do not throw a user error."
     (unless no-error
       (user-error "Aborted"))))
 
+;; TODO: Finish
+(cl-defun e--execute-directive (directive)
+  "Send DIRECTIVE to GPTel for evaluation."
+  (let ((being-executed (overlay-get directive 'e-being-executed)))
+    (when being-executed
+      (cl-return-from e--execute-directive)))
+  (overlay-put directive 'e-being-executed t)
+  (e--update-instruction-overlay directive t))
+
 (provide 'evedel)
+;;; evedel.el ends here.
 
 ;; Local Variables:
 ;; read-symbol-shorthands: (("e-" . "evedel-"));
 ;; End:
-
-;;; evedel.el ends here.
