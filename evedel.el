@@ -192,11 +192,7 @@ function will resize it.  See either `evedel-create-or-delete-reference' or
             instruction)))
     ;; Else: no region is currently selected.
     (if-let ((instruction (e--highest-priority-instruction
-                           ;; We use a region detection in order to be able to also delete bodyless
-                           ;; instructions.
-                           (e--instructions-in-region (point)
-                                                      (min (point-max) (1+ (point)))
-                                                      type))))
+                           (e--instructions-at (point) type))))
         (e--delete-instruction instruction)
       (when (eq type 'directive)
         (prog1 (e--create-directive-in-region (current-buffer) (point) (point) t)
@@ -234,18 +230,35 @@ command will instead resize the directive in the following manner:
   (interactive)
   (e--create-or-delete-instruction 'directive))
 
-(defun e-execute-directive-at-point ()
-  "Send the directive at point to the model via GPTel."
+(defun e-modify-directive-at-point ()
+  "Modify the directive under the point."
   (interactive)
-  (when-let ((directive (car (e--instructions-at-point (point) 'directive))))
-    (e--execute-directive directive)))
+  (when-let ((directive (e--highest-priority-instruction
+                         (e--instructions-at (point) 'directive))))
+    (when (overlay-get directive 'e-being-executed)
+      (user-error "Cannot modify a directive that is being executed"))
+    (e--directive-prompt directive)))
 
-(defun e-execute-directives-in-region (beg end)
-  "Send directives between BEG and END to the model via GPTel."
-  (interactive "r")
-  (when-let ((directives (e--instructions-in-region beg end 'directive)))
-    (dolist (directive directives)
-      (e--execute-directive directive))))
+(defun e-execute-directives ()
+  "Send directives to model via GPTel.
+
+If a region is selected, send all directives within the region.
+If a region is not selected and there is a directive under the point, send it."
+  (interactive)
+  (if (region-active-p)
+      (when-let ((toplevel-directives
+                  (cl-remove-duplicates
+                   (mapcar (lambda (inst)
+                             (e--toplevel-instruction inst 'directive))
+                           (e--instructions-in-region (region-beginning)
+                                                      (region-end)
+                                                      'directive)))))
+        (dolist (directive toplevel-directives)
+          (e--execute-directive directive)))
+    (when-let ((directive (e--toplevel-instruction (e--highest-priority-instruction
+                                                    (e--instructions-at (point) 'directive))
+                                                   'directive)))
+    (e--execute-directive directive))))
   
 (defun e-delete-instruction-at-point ()
   "Delete the instruction instruction at point."
@@ -449,7 +462,7 @@ non-nil."
                          (eq (e--instruction-type parent) 'directive))
                     (setq label "DIRECTIVE HINT")
                   (when being-executed
-                    (setq label "PROCESSING\n"))
+                    (setq label "PROCESSING\n\n"))
                   (setq label (concat label "DIRECTIVE"))))
               (let ((directive (overlay-get instruction 'e-directive)))
                 (if (string-empty-p directive)
@@ -531,17 +544,19 @@ Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
                              (<= (overlay-end ov) end)))
                       (overlays-in start end))))
 
-(defun e--instructions-at-point (point &optional type)
+(defun e--instructions-at (point &optional type)
   "Return a list of instructions at current POINT.
 
-Optionally return only instructions of specific TYPE."
+Optionally return only instructions of specific TYPE.
+Also returns bodyless overlays located right before the point."
   (cl-remove-if-not (lambda (ov)
                       (and (overlay-get ov 'e-instruction)
                            (or (and type
                                     (eq (overlay-get ov 'e-instruction-type)
                                         type))
                                (null type))))
-                    (overlays-at point)))
+                    (overlays-in point
+                                 (min (point-max) (1+ point)))))
 
 (defun e--instructions-in-region (start end &optional type)
   "Return a list of instructions in region delimited by START and END.
@@ -571,6 +586,25 @@ Does not return instructions that contain the region in its entirety the region.
 (defun e--instructions ()
   "Return a list of all Evedel instructions."
   (e--foreach-instruction inst collect inst))
+
+(defun e--toplevel-instruction (instruction &optional type)
+  "Return the top-level instruction containing the INSTRUCTION, if any.
+
+If TYPE is non-nil, filter by specified instruction type."
+  (with-current-buffer (overlay-buffer instruction)
+    (let ((toplevel-instruction
+           (cl-reduce (lambda (acc inst)
+                        (if (< (overlay-get acc 'priority)
+                               (overlay-get inst 'priority))
+                            acc
+                          inst))
+                      (e--instructions-at (overlay-start instruction))
+                      :initial-value instruction)))
+      (if (null type)
+          toplevel-instruction
+        (if (eq (overlay-get toplevel-instruction 'e-instruction-type) type)
+            toplevel-instruction
+          nil)))))
 
 (defun e--recreate-instructions ()
   "Recreate all instructions.  Used for debugging purposes."
@@ -668,7 +702,22 @@ If NO-ERROR is non-nil, do not throw a user error."
     (unless no-error
       (user-error "Aborted"))))
 
-;; TODO: Finish
+;; TODO: Clean up mess below.
+
+(defun e--descriptive-mode-role (mode)
+  "Derive the descriptive major mode role name from the major MODE."
+  (pcase mode
+    ('emacs-lisp-mode "an Emacs Lisp programmer")
+    ('js-mode "a JavaScript programmer")
+    ('c-mode "a C programmer")
+    ('c++-mode "a C++ programmer")
+    ('lisp-mode "a Common Lisp programmer")
+    ('web-mode "a web developer")
+    (_ (concat "a helpful assistant"))))
+
+;; sysmsg
+(concat "You are " (e--descriptive-mode-role major-mode) ". Follow user directive.")
+
 (cl-defun e--execute-directive (directive)
   "Send DIRECTIVE to GPTel for evaluation."
   (let ((being-executed (overlay-get directive 'e-being-executed)))
@@ -676,6 +725,7 @@ If NO-ERROR is non-nil, do not throw a user error."
       (cl-return-from e--execute-directive)))
   (overlay-put directive 'e-being-executed t)
   (e--update-instruction-overlay directive t))
+
 
 (provide 'evedel)
 ;;; evedel.el ends here.
