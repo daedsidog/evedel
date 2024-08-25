@@ -69,7 +69,19 @@
   :type 'float
   :group 'evedel)
 
-(defvar e--instructions (make-hash-table))
+(defcustom e-descriptive-mode-roles
+  '((emacs-lisp-mode . "an Emacs Lisp programmer")
+    (js-mode         . "a JavaScript programmer")
+    (c-mode          . "a C programmer")
+    (c++-mode        . "a C++ programmer")
+    (lisp-mode       . "a Common Lisp programmer")
+    (web-mode        . "a web developer"))
+  "Assciation list between major modes and model roles."
+  :type 'list
+  :group 'evedel)
+
+(defvar e--instructions ()
+  "Association list mapping buffers to lists of instruction overlays.")
 (defvar e--default-instruction-priority -99)
 
 (defmacro e--foreach-instruction (instruction-binding &rest body)
@@ -82,17 +94,22 @@ making sure that the iterated instructions are valid, i.e. have an associated
 buffer to the overlay.
 
 This macro is the preferred way to iterate over instructions, as it handles all
-the internal bookkeeping."
+the internal bookkeeping and cleanup."
   (declare (indent 1))
-  (cl-with-gensyms (marked-for-deletion malformed-inst)
-    `(let ((,marked-for-deletion ()))
-       (prog1 (cl-loop for ,instruction-binding being the hash-keys of e--instructions
-                       if (overlay-buffer ,instruction-binding)
-                       ,@body
-                       else do (push ,instruction-binding ,marked-for-deletion)
-                       end)
-         (cl-loop for ,malformed-inst in ,marked-for-deletion
-                  do (remhash ,malformed-inst e--instructions))))))
+  (cl-with-gensyms (cons)
+    `(progn
+       ;; Remove invalid buffers from the instruction alist.
+       (setq e--instructions
+             (cl-loop for ,cons in e--instructions
+                      do (setf (cdr ,cons)
+                               (cl-delete-if-not (lambda (inst)
+                                                   (bufferp (overlay-buffer inst)))
+                                                 (cdr ,cons)))
+                      when (cdr ,cons)
+                      collect ,cons))
+       (prog1 (cl-loop for ,instruction-binding
+                       in (flatten-tree (mapcar #'cdr e--instructions))
+                       ,@body)))))
 
 ;;;###autoload
 (defun e-save-instructions (path)
@@ -281,7 +298,7 @@ If a region is not selected and there is a directive under the point, send it."
       (when (called-interactively-p 'interactive)
         (setq buffers (cl-remove-duplicates (mapcar #'overlay-buffer instructions))))
       (mapc #'e--delete-instruction instructions)
-      (clrhash e--instructions)
+      (setq e--instructions nil)
       (when (and instructions buffers)
         (let ((instruction-count (length instructions))
               (buffer-count (length buffers)))
@@ -331,7 +348,7 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
   (with-current-buffer buffer
     (let ((overlay (make-overlay start end)))
       (overlay-put overlay 'e-instruction t)
-      (puthash overlay t e--instructions)
+      (push overlay (alist-get buffer e--instructions))
       (unless (bound-and-true-p e--after-change-functions-hooked)
         (setq-local e--after-change-functions-hooked t)
         (add-hook 'after-change-functions
@@ -409,7 +426,7 @@ BODYLESS controls special formatting if non-nil."
 (defun e--delete-instruction (instruction)
   "Delete the INSTRUCTION overlay."
   (let ((children (e--child-instructions instruction)))
-    (remhash instruction e--instructions)
+    (delq instruction (alist-get (overlay-buffer instruction) e--instructions))
     (delete-overlay instruction)
     (dolist (child children)
       (if (eq (overlay-get child 'e-instruction-type)
@@ -533,7 +550,7 @@ Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
     (mapc (lambda (prop)
             (overlay-put new-ov prop (plist-get properties prop)))
           properties)
-    (puthash new-ov t e--instructions)))
+    (push new-ov (alist-get buffer e--instructions))))
 
 (defun e--wholly-contained-instructions (buffer start end)
   "Return Evedel overlays in BUFFER that are entirely within START and END."
@@ -702,21 +719,32 @@ If NO-ERROR is non-nil, do not throw a user error."
     (unless no-error
       (user-error "Aborted"))))
 
-;; TODO: Clean up mess below.
-
 (defun e--descriptive-mode-role (mode)
-  "Derive the descriptive major mode role name from the major MODE."
-  (pcase mode
-    ('emacs-lisp-mode "an Emacs Lisp programmer")
-    ('js-mode "a JavaScript programmer")
-    ('c-mode "a C programmer")
-    ('c++-mode "a C++ programmer")
-    ('lisp-mode "a Common Lisp programmer")
-    ('web-mode "a web developer")
-    (_ (concat "a helpful assistant"))))
+  "Derive the descriptive major mode role name from the major MODE.
 
-;; sysmsg
-(concat "You are " (e--descriptive-mode-role major-mode) ". Follow user directive.")
+Defaults to \"a helpful assistant\" if no appropriate role has been found in
+the `evedel-descriptive-mode-roles' variable."
+  (if-let ((role (alist-get mode e-descriptive-mode-roles)))
+      role
+    "a helpful assistant"))
+
+;; ;; sysmsg
+;; (concat "You are " (e--descriptive-mode-role major-mode) ". Follow user directive.")
+
+;; ;; prompt
+;; (let ((is-programmer (derived-mode-p 'prog-mode))
+;;       (reference-count (e--foreach-instruction inst with refcount = 0
+;;                                                when (eq (e--instruction-type inst)
+;;                                                         'reference)
+;;                                                do (incf refcount)
+;;                                                finally (cl-return refcount))))
+;;   (concat "Listed below" (pcase refcount
+;;                            (0 " is a")
+;;                            (1 " is a single reference and a")
+;;                            (_ " are references and a"))
+;;           (when is-programmer " programming")
+;;           " directive."))
+          
 
 (cl-defun e--execute-directive (directive)
   "Send DIRECTIVE to GPTel for evaluation."
@@ -725,7 +753,6 @@ If NO-ERROR is non-nil, do not throw a user error."
       (cl-return-from e--execute-directive)))
   (overlay-put directive 'e-being-executed t)
   (e--update-instruction-overlay directive t))
-
 
 (provide 'evedel)
 ;;; evedel.el ends here.
