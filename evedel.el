@@ -719,32 +719,58 @@ If NO-ERROR is non-nil, do not throw a user error."
     (unless no-error
       (user-error "Aborted"))))
 
-(defun e--descriptive-mode-role (mode)
+(defun e--descriptive-llm-mode-role (mode)
   "Derive the descriptive major mode role name from the major MODE.
 
 Defaults to \"a helpful assistant\" if no appropriate role has been found in
-the `evedel-descriptive-mode-roles' variable."
+the `evedel-descriptive-mode-roles' variable.
+
+The role will default to \"a careful programmer\" if the major mode is not
+listed in `evedel-descriptive-mode-roles' but is derivative from `prog-mode'."
   (if-let ((role (alist-get mode e-descriptive-mode-roles)))
       role
-    "a helpful assistant"))
+    (if (provided-mode-derived-p mode 'prog-mode)
+        "a careful programmer"
+      "a helpful assistant")))
 
-;; ;; sysmsg
-;; (concat "You are " (e--descriptive-mode-role major-mode) ". Follow user directive.")
+(defun e--directive-llm-system-message (directive)
+  "Craft the system message for the LLM model associated with the DIRECTIVE.
 
-;; ;; prompt
-;; (let ((is-programmer (derived-mode-p 'prog-mode))
-;;       (reference-count (e--foreach-instruction inst with refcount = 0
-;;                                                when (eq (e--instruction-type inst)
-;;                                                         'reference)
-;;                                                do (incf refcount)
-;;                                                finally (cl-return refcount))))
-;;   (concat "Listed below" (pcase refcount
-;;                            (0 " is a")
-;;                            (1 " is a single reference and a")
-;;                            (_ " are references and a"))
-;;           (when is-programmer " programming")
-;;           " directive."))
-          
+Returns the message as a string."
+  (with-current-buffer (overlay-buffer directive)
+    (concat "You are " (e--descriptive-llm-mode-role major-mode) ". Follow user directive.")))
+
+(defun e--directive-llm-prompt (directive)
+  "Craft the prompt for the LLM model associated with the DIRECTIVE.
+
+Returns the prompt as a string."
+  (let* ((is-programmer (derived-mode-p 'prog-mode))
+         (toplevel-references (e--foreach-instruction
+                               inst when (eq (e--toplevel-instruction inst 'reference) inst)
+                               collect inst))
+         (reference-count (length toplevel-references))
+         (directive-toplevel-reference (e--toplevel-instruction directive 'reference))
+         (directive-buffer (overlay-buffer directive))
+         (directive-buffer-name (buffer-name directive-buffer))
+         ;; Should the directive buffer have a valid file path, we should use a relative path for
+         ;; the other references, assuming that they too have a valid file path.
+         (directive-filename (buffer-file-name directive-buffer))
+         (markers ()))
+    ;; This marking function is used to mark the prompt text so that it may later be formatted by
+    ;; sections, should the need to do so will arise.
+    (cl-flet ((mark () (push (set-marker (make-marker (point))) markers)))
+      (with-temp-buffer
+        (mark)
+        (insert
+         (concat "Listed below" (pcase reference-count
+                                  (0 " is a")
+                                  (1 " is a single reference and a")
+                                  (_ " are references and a"))
+                 (when is-programmer " programming")
+                 " directive."))
+        (mark)
+        ;; TODO: Complete
+        (buffer-substring-no-properties)))))
 
 (cl-defun e--execute-directive (directive)
   "Send DIRECTIVE to GPTel for evaluation."
