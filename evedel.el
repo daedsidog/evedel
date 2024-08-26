@@ -387,7 +387,7 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
     smallest-overlay))
 
 (cl-defun e--child-instructions (instruction)
-  "Return the child instructions of the given INSTRUCTION overlay."
+  "Return the child direcct instructions of the given INSTRUCTION overlay."
   ;; Bodyless instructions cannot have any children.
   (when (overlay-get instruction 'e-bodyless)
     (cl-return-from e--child-instructions nil))
@@ -719,32 +719,226 @@ If NO-ERROR is non-nil, do not throw a user error."
     (unless no-error
       (user-error "Aborted"))))
 
-(defun e--descriptive-mode-role (mode)
+(defun e--descriptive-llm-mode-role (mode)
   "Derive the descriptive major mode role name from the major MODE.
 
 Defaults to \"a helpful assistant\" if no appropriate role has been found in
-the `evedel-descriptive-mode-roles' variable."
+the `evedel-descriptive-mode-roles' variable.
+
+The role will default to \"a careful programmer\" if the major mode is not
+listed in `evedel-descriptive-mode-roles' but is derivative from `prog-mode'."
   (if-let ((role (alist-get mode e-descriptive-mode-roles)))
       role
-    "a helpful assistant"))
+    (if (provided-mode-derived-p mode 'prog-mode)
+        "a careful programmer"
+      "a helpful assistant")))
 
-;; ;; sysmsg
-;; (concat "You are " (e--descriptive-mode-role major-mode) ". Follow user directive.")
+(defun e--directive-llm-system-message (directive)
+  "Craft the system message for the LLM model associated with the DIRECTIVE.
 
-;; ;; prompt
-;; (let ((is-programmer (derived-mode-p 'prog-mode))
-;;       (reference-count (e--foreach-instruction inst with refcount = 0
-;;                                                when (eq (e--instruction-type inst)
-;;                                                         'reference)
-;;                                                do (incf refcount)
-;;                                                finally (cl-return refcount))))
-;;   (concat "Listed below" (pcase refcount
-;;                            (0 " is a")
-;;                            (1 " is a single reference and a")
-;;                            (_ " are references and a"))
-;;           (when is-programmer " programming")
-;;           " directive."))
-          
+Returns the message as a string."
+  (with-current-buffer (overlay-buffer directive)
+    (concat "You are " (e--descriptive-llm-mode-role major-mode) ". Follow user directive.")))
+
+(defun e--delimiting-markdown-backticks (string)
+  "Return a string containing the appropriate code block backticks for STRING."
+  (let ((backticks "```"))
+    (while (string-match-p backticks string)
+      (setq backticks (concat backticks "`")))
+    backticks))
+
+(defun e--overlay-region-info (overlay)
+  "Return region span information of OVERLAY in its buffer.
+
+Returns two values, first being the region line & column span string in the
+buffer, and the second being the content of the span itself."
+  (let ((start (overlay-start overlay))
+        (end (overlay-end overlay))
+        start-line
+        end-line
+        start-column
+        end-column
+        start-prop
+        end-prop)
+    (with-current-buffer (overlay-buffer overlay)
+      (without-restriction
+        (save-excursion
+          (goto-char start)
+          (setq start-column (current-column))
+          (if (bolp)
+              (setq start-prop :bol)
+            (if (eolp)
+                (setq start-prop :eol)))
+          (goto-char end)
+          (setq end-column (current-column))
+          (if (bolp)
+              (setq end-prop :bol)
+            (if (eolp)
+                (setq end-prop :eol))))
+        (when (and (eq start-prop :eol) (not (eq start-prop :bol)))
+          (cl-incf start)
+          (setq start-prop :bol))
+        (when (and (eq end-prop :bol) (not (eq end-prop :eol)))
+          (cl-decf end)
+          (setq end-prop :eol))
+        (setq start-line (line-number-at-pos start t)
+              end-line (line-number-at-pos end t))
+        (cl-values (format "lines %d%s-%d%s"
+                      start-line
+                      (if (eq start-prop :bol)
+                          ""
+                        (format ":%d" start-column))
+                      end-line
+                      (if (eq end-prop :eol)
+                          ""
+                        (format ":%d" end-column)))
+                   (buffer-substring-no-properties start end))))))
+
+(defun e--markdown-enquote (input-string)
+  "Add Markdown blockquote to each line in INPUT-STRING."
+  (let ((lines (split-string input-string "\n")))
+    (mapconcat (lambda (line) (concat "> " line)) lines "\n")))
+
+(defun e--directive-llm-prompt (directive)
+  "Craft the prompt for the LLM model associated with the DIRECTIVE.
+
+Returns the prompt as a string."
+  (let* ((is-programmer (derived-mode-p 'prog-mode))
+         (toplevel-references (e--foreach-instruction
+                                  inst when (eq (e--toplevel-instruction inst 'reference) inst)
+                                  collect inst))
+         ;; The references in the reference alist should be sorted by their order of appearance
+         ;; in the buffer.
+         (reference-alist (cl-loop for reference in toplevel-references with alist = ()
+                                   do (push reference (alist-get (overlay-buffer reference) alist))
+                                   finally (progn
+                                             (cl-loop for (_ . references) in alist
+                                                      do (sort references
+                                                               (lambda (x y)
+                                                                 (< (overlay-start x)
+                                                                    (overlay-start y)))))
+                                             (cl-return alist))))
+         (reference-count (length toplevel-references))
+         (directive-toplevel-reference (e--toplevel-instruction directive 'reference))
+         (directive-buffer (overlay-buffer directive))
+         ;; Should the directive buffer have a valid file path, we should use a relative path for
+         ;; the other references, assuming that they too have a valid file path.
+         (directive-filename (buffer-file-name directive-buffer)))
+    (cl-destructuring-bind (directive-region-info-string directive-region-string)
+        (e--overlay-region-info directive)
+      ;; This marking function is used to mark the prompt text so that it may later be formatted by
+      ;; sections, should the need to do so will arise.
+      (cl-labels ((capitalize-first-letter (s)
+                    (if (> (length s) 0)
+                        (concat (upcase (substring s 0 1)) (downcase (substring s 1)))
+                      nil))
+                  (instruction-path-namestring (buffer)
+                    (if directive-filename
+                        (if-let ((buffer-filename (buffer-file-name buffer)))
+                            (format "file `%s`"
+                                    (file-relative-name
+                                     buffer-filename
+                                     (file-name-parent-directory directive-filename)))
+                          (format "buffer `%s`" (buffer-name buffer)))
+                      (format "buffer `%s`" (buffer-name buffer))))
+                  (expanded-directive-string (directive)
+                    (let ((directive-hints
+                           (cl-remove-if-not (lambda (inst)
+                                               (and (eq (e--instruction-type inst) 'directive)
+                                                    (not (eq inst directive))))
+                                             (e--wholly-contained-instructions
+                                              (overlay-buffer directive)
+                                              (overlay-start directive)
+                                              (overlay-end directive)))))
+                      (concat
+                       (format "%s" directive-region-info-string)
+                       (if (string-empty-p directive-region-string)
+                           ":"
+                         (let ((markdown-delimiter
+                                (e--delimiting-markdown-backticks directive-region-string)))
+                           (concat
+                            ", corresponding to"
+                            "\n\n"
+                            (format "%s\n%s\n%s"
+                                    markdown-delimiter
+                                    directive-region-string
+                                    markdown-delimiter)
+                            "\n\n")))
+                       (format "with the directive being:\n\n%s"
+                               (e--markdown-enquote (overlay-get directive 'e-directive)))
+                       (cl-loop for hint in directive-hints
+                                concat (concat
+                                        "\n\n"
+                                        (cl-destructuring-bind (hint-region-info _)
+                                            (e--overlay-region-info hint)
+                                          (format "Hint for %s:\n\n%s"
+                                                  hint-region-info
+                                                  (e--markdown-enquote
+                                                   (overlay-get hint 'e-directive))))))))))
+        (with-temp-buffer
+          (insert
+           (concat "Listed below" (pcase reference-count
+                                    (0 " is a")
+                                    (1 " is a single reference and a")
+                                    (_ " are references and a"))
+                   (when is-programmer " programming")
+                   " directive."
+                   (when directive-toplevel-reference
+                     (format " Note that the directive is embedded within %s reference."
+                             (if (> reference-count 1) "the" "a")))
+           " Follow the directive and return what it asks of you.
+
+What you return must be enclosed within a Markdown block. The content of your Markdown block will \
+be parsed, and the result will then be formatted and injected into the region the directive spans, \
+replacing it."
+           (when (string-empty-p directive-region-string)
+             " In this case, since the directive doesn't span a region, your response will be \
+injected directly instead of it, without replacing anything.")))
+          (insert
+           (concat
+            "\n\n"
+            (format "## Reference%s%s"
+                    (if (> reference-count 1) "s" "")
+                    (if directive-toplevel-reference " & Directive" ""))))
+          (cl-loop for (buffer . references) in reference-alist
+                   do (progn
+                        (insert
+                         (concat
+                          "\n\n"
+                          (format "### %s" (capitalize-first-letter
+                                            (instruction-path-namestring buffer)))))
+                        (dolist (ref references)
+                          (cl-destructuring-bind (ref-info-string ref-string)
+                              (e--overlay-region-info ref)
+                            (let ((markdown-delimiter
+                                   (e--delimiting-markdown-backticks ref-string)))
+                              (insert
+                               (concat
+                                "\n\n"
+                                (format "Reference in %s%s"
+                                        ref-info-string
+                                        (if (eq ref directive-toplevel-reference)
+                                            (format " with embedded directive in %s"
+                                                    directive-region-info-string)
+                                          ":"))
+                                "\n\n"
+                                (format "%s\n%s\n%s"
+                                        markdown-delimiter
+                                        ref-string
+                                        markdown-delimiter)
+                                (when directive-toplevel-reference
+                                  (concat
+                                   (format "\n\nwith directive embedded in %s"
+                                           (expanded-directive-string directive)))))))))))
+          (unless directive-toplevel-reference
+            (insert
+             (concat "\n\n"
+                     "## Directive"
+                     "\n\n"
+                     (format "For %s, %s"
+                             (instruction-path-namestring directive-buffer)
+                             (expanded-directive-string directive)))))
+          (buffer-substring-no-properties (point-min) (point-max)))))))
 
 (cl-defun e--execute-directive (directive)
   "Send DIRECTIVE to GPTel for evaluation."
