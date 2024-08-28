@@ -387,7 +387,7 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
     smallest-overlay))
 
 (cl-defun e--child-instructions (instruction)
-  "Return the child instructions of the given INSTRUCTION overlay."
+  "Return the child direcct instructions of the given INSTRUCTION overlay."
   ;; Bodyless instructions cannot have any children.
   (when (overlay-get instruction 'e-bodyless)
     (cl-return-from e--child-instructions nil))
@@ -794,149 +794,117 @@ buffer, and the second being the content of the span itself."
                         (format ":%d" end-column)))
                    (buffer-substring-no-properties start end))))))
 
-;; (defun e--directive-llm-prompt (directive)
-;;   "Craft the prompt for the LLM model associated with the DIRECTIVE.
+(defun e--directive-llm-prompt (directive)
+  "Craft the prompt for the LLM model associated with the DIRECTIVE.
 
-;; Returns the prompt as a string."
-;;   (let* ((is-programmer (derived-mode-p 'prog-mode))
-;;          (toplevel-references (e--foreach-instruction
-;;                                inst when (eq (e--toplevel-instruction inst 'reference) inst)
-;;                                collect inst))
-;;          ;; The references in the reference alist should be sorted by their order of appearance
-;;          ;; in the buffer.
-;;          (reference-alist (cl-loop for reference in toplevel-references with alist = ()
-;;                                    do (setf (alist-get (overlay-buffer reference) alist) reference)
-;;                                    finally (progn
-;;                                              (cl-loop for (_ . references) in alist
-;;                                                       (sort references
-;;                                                             (lambda (x y)
-;;                                                               (< (overlay-start x)
-;;                                                                  (overlay-start y)))))
-;;                                              (cl-return alist))))
-;;          (reference-count (length toplevel-references))
-;;          (directive-toplevel-reference (e--toplevel-instruction directive 'reference))
-;;          (directive-buffer (overlay-buffer directive))
-;;          (directive-buffer-name (buffer-name directive-buffer))
-;;          ;; Should the directive buffer have a valid file path, we should use a relative path for
-;;          ;; the other references, assuming that they too have a valid file path.
-;;          (directive-filename (buffer-file-name directive-buffer))
-;;          (markers ()))
-;;     ;; This marking function is used to mark the prompt text so that it may later be formatted by
-;;     ;; sections, should the need to do so will arise.
-;;     (cl-flet ((mark () (push (set-marker (make-marker) (point)) markers))
-;;               (buffer-or-relative-file-namestring (buffer)
-;;                 (if directive-filename
-;;                     (if-let ((buffer-filename (buffer-file-name buffer)))
-;;                         (format "File `%s`"
-;;                                 (file-relative-name
-;;                                  buffer-filename
-;;                                  (file-name-parent-directroy directive-filename)))
-;;                       (format "Buffer `%s`" (buffer-name buffer)))
-;;                   (format "Buffer `%s`" (buffer-name buffer)))))
-;;       (with-temp-buffer
-;;         (mark)
-;;         (insert
-;;          (concat "Listed below" (pcase reference-count
-;;                                   (0 " is a")
-;;                                   (1 " is a single reference and a")
-;;                                   (_ " are references and a"))
-;;                  (when is-programmer " programming")
-;;                  " directive."
-;;                  (when directive-toplevel-reference
-;;                    " Note that the directive is embedded within a reference.")))
-;;         (mark)
-;;         (insert
-;;          (concat "
-
-;; "
-;;                  (format "## Reference%s%s"
-;;                          (if (> reference-count 1) "s" "")
-;;                          (if directive-toplevel-reference " & Directive" ""))
-;;         (cl-loop for (buffer . references) in reference-alist
-;;                  do (progn
-;;                       (insert
-;;                        (concat
-;;                         "
-
-;; "
-;;                         (format "### %s" (buffer-or-relative-file-namestring buffer))
-;;                         "
-
-;; "))
-;;                       (dolist (ref references)
-;;                         (let (reference-string reference-region-info-string)
-;;                           ;; The purpose of this next form is to determine nice and clean column
-;;                           ;; numbers that are associated with the line numbers.  If, for instance,
-;;                           ;; the overlay covers the first character of a newline, then we will
-;;                           ;; instead pretend that it spans until the character before it, so that we
-;;                           ;; won't have to indiciate that the column of the last line starts at a
-;;                           ;; newline character.
-;;                           (let ((start (overlay-start context))
-;;                                 (end (overlay-end context))
-;;                                 start-line
-;;                                 end-line
-;;                                 start-column
-;;                                 end-column
-;;                                 start-prop
-;;                                 end-prop)
-;;                             (with-current-buffer buffer
-;;                               (without-restriction
-;;                                 (save-excursion
-;;                                   (goto-char start)
-;;                                   (setq start-column (current-column))
-;;                                   (if (bolp)
-;;                                       (setq start-prop :bol)
-;;                                     (if (eolp)
-;;                                         (setq start-prop :eol)))
-;;                                   (goto-char end)
-;;                                   (setq end-column (current-column))
-;;                                   (if (bolp)
-;;                                       (setq end-prop :bol)
-;;                                     (if (eolp)
-;;                                         (setq end-prop :eol))))
-;;                                 (when (and (eq start-prop :eol) (not (eq start-prop :bol)))
-;;                                   (cl-incf start)
-;;                                   (setq start-prop :bol))
-;;                                 (when (and (eq end-prop :bol) (not (eq end-prop :eol)))
-;;                                   (cl-decf end)
-;;                                   (setq end-prop :eol))
-;;                                 (setq start-line (line-number-at-pos start t)
-;;                                       end-line (line-number-at-pos end t))
-;;                                 (setq reference-string
-;;                                       (buffer-substring-no-properties start end))
-;;                                 (setq reference-region-info-string
-;;                                       (format "lines %d%s-%d%s"
-;;                                               start-line
-;;                                               (if (eq start-prop :bol)
-;;                                                   ""
-;;                                                 (format ":%d" start-column))
-;;                                               end-line
-;;                                               (if (eq end-prop :eol)
-;;                                                   ""
-;;                                                 (format ":%d" end-column)))))))
-;;                           (let ((markdown-delimiter
-;;                                  (e--delimiting-markdown-backticks reference-string)))
-;;                             (insert
-;;                              (concat "
-
-;; "
-;;                                      (format "Reference in %s%s"
-;;                                              reference-region-info-string
-;;                                              (if directive-toplevel-reference
-;;                                                  (format " with embedded directive in %s:"
-;;                                                          (
-;;                                      "
-
-;; "
-;;                                      (format "%s
-;; %s
-;; %s"
-;;                                              markdown-delimiter
-;;                                              reference-string
-;;                                              markdown-delimiter))))
-                                   
-                          
-;;                           (buffer-substring-no-properties (point-min) (point-max))))))
+Returns the prompt as a string."
+  (let* ((is-programmer (derived-mode-p 'prog-mode))
+         (toplevel-references (e--foreach-instruction
+                                  inst when (eq (e--toplevel-instruction inst 'reference) inst)
+                                  collect inst))
+         ;; The references in the reference alist should be sorted by their order of appearance
+         ;; in the buffer.
+         (reference-alist (cl-loop for reference in toplevel-references with alist = ()
+                                   do (setf (alist-get (overlay-buffer reference) alist) reference)
+                                   finally (progn
+                                             (cl-loop for (_ . references) in alist
+                                                      do (sort references
+                                                               (lambda (x y)
+                                                                 (< (overlay-start x)
+                                                                    (overlay-start y)))))
+                                             (cl-return alist))))
+         (reference-count (length toplevel-references))
+         (directive-toplevel-reference (e--toplevel-instruction directive 'reference))
+         (directive-buffer (overlay-buffer directive))
+         ;; Should the directive buffer have a valid file path, we should use a relative path for
+         ;; the other references, assuming that they too have a valid file path.
+         (directive-filename (buffer-file-name directive-buffer))
+         (markers ()))
+    ;; This marking function is used to mark the prompt text so that it may later be formatted by
+    ;; sections, should the need to do so will arise.
+    (cl-labels ((mark () (push (set-marker (make-marker) (point)) markers))
+                (buffer-or-relative-file-namestring (buffer)
+                  (if directive-filename
+                      (if-let ((buffer-filename (buffer-file-name buffer)))
+                          (format "File `%s`"
+                                  (file-relative-name
+                                   buffer-filename
+                                   (file-name-parent-directory directive-filename)))
+                        (format "Buffer `%s`" (buffer-name buffer)))
+                    (format "Buffer `%s`" (buffer-name buffer))))
+                (directive-string (directive)
+                  (let ((directive-hints
+                         (cl-remove-if-not (lambda (inst)
+                                             (and (eq (e--instruction-type inst) 'directive)
+                                                  (not (eq inst directive))))
+                                           (e--wholly-contained-instructions
+                                            (overlay-buffer directive)
+                                            (overlay-start directive)
+                                            (overlay-end directive)))))
+                    (concat (overlay-get directive 'e-directive)
+                            (cl-loop for hint in directive-hints
+                                     concat (concat
+                                             "\n\n"
+                                             (cl-destructuring-bind (hint-region-info
+                                                                     hint-string)
+                                                 (cl-first (e--overlay-region-info hint))
+                                               (format "Hint for %s: %s"
+                                                       hint-region-info
+                                                       hint-string))))))))
+      (cl-destructuring-bind (directive-region-info-string _) (e--overlay-region-info directive)
+        (with-temp-buffer
+          (mark)
+          (insert
+           (concat "Listed below" (pcase reference-count
+                                    (0 " is a")
+                                    (1 " is a single reference and a")
+                                    (_ " are references and a"))
+                   (when is-programmer " programming")
+                   " directive."
+                   (when directive-toplevel-reference
+                     " Note that the directive is embedded within a reference.")))
+          (mark)
+          (insert
+           (concat
+            "\n\n"
+            (format "## Reference%s%s"
+                    (if (> reference-count 1) "s" "")
+                    (if directive-toplevel-reference " & Directive" ""))
+            (cl-loop for (buffer . references) in reference-alist
+                     do (progn
+                          (insert
+                           (concat
+                            "\n\n"
+                            (format "### %s" (buffer-or-relative-file-namestring buffer))))
+                          (dolist (ref references)
+                            (cl-destructuring-bind (ref-info-string ref-string)
+                                (e--overlay-region-info ref)
+                              (let ((markdown-delimiter
+                                     (e--delimiting-markdown-backticks ref-string)))
+                                (insert
+                                 (concat
+                                  "\n\n"
+                                  (format "Reference in %s%s"
+                                          ref-info-string
+                                          (if (eq ref directive-toplevel-reference)
+                                              (format " with embedded directive in %s:"
+                                               directive-region-info-string)
+                                            ":"))
+                                  "\n\n"
+                                  (format "%s\n%s\n%s"
+                                          markdown-delimiter
+                                          ref-string
+                                          markdown-delimiter)
+                                  (when directive-toplevel-reference
+                                    (format "\n\nDirective embedded in %s: %s"
+                                             directive-region-info-string
+                                             (directive-string directive)))))))))))
+            (unless directive-toplevel-reference
+              (concat "\n\n"
+                      "## Directive"
+                      "\n\n"
+                      (directive-string directive))))
+           (buffer-substring-no-properties (point-min) (point-max)))))))
 
 (cl-defun e--execute-directive (directive)
   "Send DIRECTIVE to GPTel for evaluation."
