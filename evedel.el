@@ -885,7 +885,15 @@ Returns the prompt as a string."
                    " directive."
                    (when directive-toplevel-reference
                      (format " Note that the directive is embedded within %s reference."
-                             (if (> reference-count 1) "the" "a")))))
+                             (if (> reference-count 1) "the" "a")))
+           " Follow the directive and return what it asks of you.
+
+What you return must be enclosed within a Markdown block. The content of your Markdown block will \
+be parsed, and the result will then be formatted and injected into the region the directive spans, \
+replacing it."
+           (when (string-empty-p directive-region-string)
+             " In this case, since the directive doesn't span a region, your response will be \
+injected directly instead of it, without replacing anything.")))
           (insert
            (concat
             "\n\n"
