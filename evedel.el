@@ -794,6 +794,11 @@ buffer, and the second being the content of the span itself."
                         (format ":%d" end-column)))
                    (buffer-substring-no-properties start end))))))
 
+(defun e--markdown-enquote (input-string)
+  "Add Markdown blockquote to each line in INPUT-STRING."
+  (let ((lines (split-string input-string "\n")))
+    (mapconcat (lambda (line) (concat "> " line)) lines "\n")))
+
 (defun e--directive-llm-prompt (directive)
   "Craft the prompt for the LLM model associated with the DIRECTIVE.
 
@@ -819,42 +824,57 @@ Returns the prompt as a string."
          ;; Should the directive buffer have a valid file path, we should use a relative path for
          ;; the other references, assuming that they too have a valid file path.
          (directive-filename (buffer-file-name directive-buffer)))
-    ;; This marking function is used to mark the prompt text so that it may later be formatted by
-    ;; sections, should the need to do so will arise.
-    (cl-labels ((capitalize-first-letter (s)
-                  (if (> (length s) 0)
-                      (concat (upcase (substring s 0 1)) (downcase (substring s 1)))
-                    nil))
-                (instruction-path-namestring (buffer)
-                  (if directive-filename
-                      (if-let ((buffer-filename (buffer-file-name buffer)))
-                          (format "file `%s`"
-                                  (file-relative-name
-                                   buffer-filename
-                                   (file-name-parent-directory directive-filename)))
-                        (format "buffer `%s`" (buffer-name buffer)))
-                    (format "buffer `%s`" (buffer-name buffer))))
-                (expanded-directive-string (directive)
-                  (let ((directive-hints
-                         (cl-remove-if-not (lambda (inst)
-                                             (and (eq (e--instruction-type inst) 'directive)
-                                                  (not (eq inst directive))))
-                                           (e--wholly-contained-instructions
-                                            (overlay-buffer directive)
-                                            (overlay-start directive)
-                                            (overlay-end directive)))))
-                    (concat (overlay-get directive 'e-directive)
-                            (cl-loop for hint in directive-hints
-                                     concat (concat
-                                             "\n\n"
-                                             (cl-destructuring-bind (hint-region-info
-                                                                     hint-string)
-                                                 (cl-first (e--overlay-region-info hint))
-                                               (format "Hint for %s: %s"
-                                                       hint-region-info
-                                                       hint-string))))))))
-      (cl-destructuring-bind (directive-region-info-string directive-region-string)
-          (e--overlay-region-info directive)
+    (cl-destructuring-bind (directive-region-info-string directive-region-string)
+        (e--overlay-region-info directive)
+      ;; This marking function is used to mark the prompt text so that it may later be formatted by
+      ;; sections, should the need to do so will arise.
+      (cl-labels ((capitalize-first-letter (s)
+                    (if (> (length s) 0)
+                        (concat (upcase (substring s 0 1)) (downcase (substring s 1)))
+                      nil))
+                  (instruction-path-namestring (buffer)
+                    (if directive-filename
+                        (if-let ((buffer-filename (buffer-file-name buffer)))
+                            (format "file `%s`"
+                                    (file-relative-name
+                                     buffer-filename
+                                     (file-name-parent-directory directive-filename)))
+                          (format "buffer `%s`" (buffer-name buffer)))
+                      (format "buffer `%s`" (buffer-name buffer))))
+                  (expanded-directive-string (directive)
+                    (let ((directive-hints
+                           (cl-remove-if-not (lambda (inst)
+                                               (and (eq (e--instruction-type inst) 'directive)
+                                                    (not (eq inst directive))))
+                                             (e--wholly-contained-instructions
+                                              (overlay-buffer directive)
+                                              (overlay-start directive)
+                                              (overlay-end directive)))))
+                      (concat
+                       (format "%s" directive-region-info-string)
+                       (if (string-empty-p directive-region-string)
+                           ":"
+                         (let ((markdown-delimiter
+                                (e--delimiting-markdown-backticks directive-region-string)))
+                           (concat
+                            ", corresponding to"
+                            "\n\n"
+                            (format "%s\n%s\n%s"
+                                    markdown-delimiter
+                                    directive-region-string
+                                    markdown-delimiter)
+                            "\n\n")))
+                       (format "with the directive being:\n\n%s"
+                               (e--markdown-enquote (overlay-get directive 'e-directive)))
+                       (cl-loop for hint in directive-hints
+                                concat (concat
+                                        "\n\n"
+                                        (cl-destructuring-bind (hint-region-info _)
+                                            (e--overlay-region-info hint)
+                                          (format "Hint for %s:\n\n%s"
+                                                  hint-region-info
+                                                  (e--markdown-enquote
+                                                   (overlay-get hint 'e-directive))))))))))
         (with-temp-buffer
           (insert
            (concat "Listed below" (pcase reference-count
@@ -864,7 +884,8 @@ Returns the prompt as a string."
                    (when is-programmer " programming")
                    " directive."
                    (when directive-toplevel-reference
-                     " Note that the directive is embedded within a reference.")))
+                     (format " Note that the directive is embedded within %s reference."
+                             (if (> reference-count 1) "the" "a")))))
           (insert
            (concat
             "\n\n"
@@ -889,7 +910,7 @@ Returns the prompt as a string."
                                 (format "Reference in %s%s"
                                         ref-info-string
                                         (if (eq ref directive-toplevel-reference)
-                                            (format " with embedded directive in %s:"
+                                            (format " with embedded directive in %s"
                                                     directive-region-info-string)
                                           ":"))
                                 "\n\n"
@@ -898,9 +919,9 @@ Returns the prompt as a string."
                                         ref-string
                                         markdown-delimiter)
                                 (when directive-toplevel-reference
-                                  (format "\n\nDirective embedded in %s: %s"
-                                          directive-region-info-string
-                                          (expanded-directive-string directive))))))))))
+                                  (concat
+                                   (format "\n\nwith directive embedded in %s"
+                                           (expanded-directive-string directive)))))))))))
           (unless directive-toplevel-reference
             (insert
              (concat "\n\n"
@@ -908,20 +929,7 @@ Returns the prompt as a string."
                      "\n\n"
                      (format "For %s, %s"
                              (instruction-path-namestring directive-buffer)
-                             directive-region-info-string)
-                     (if (string-empty-p directive-region-string)
-                         ":"
-                       (let ((markdown-delimiter
-                              (e--delimiting-markdown-backticks directive-region-string)))
-                         (concat
-                          ", corresponding to:"
-                          "\n\n"
-                          (format "%s\n%s\n%s"
-                                  markdown-delimiter
-                                  directive-region-string
-                                  markdown-delimiter)
-                          "\n\n")))
-                     (expanded-directive-string directive))))
+                             (expanded-directive-string directive)))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
 (cl-defun e--execute-directive (directive)
