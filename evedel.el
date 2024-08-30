@@ -33,6 +33,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'gptel)
 
 (defcustom e-reference-color "yellow"
   "Color to be used as a tint for reference overlays."
@@ -256,26 +257,47 @@ command will instead resize the directive in the following manner:
       (user-error "Cannot modify a directive that is being executed"))
     (e--directive-prompt directive)))
 
-(defun e-execute-directives ()
-  "Send directives to model via GPTel.
+(defun e-execute-directives (&optional arg)
+  "Send directives to model via gptel.
 
 If a region is selected, send all directives within the region.
-If a region is not selected and there is a directive under the point, send it."
+If a region is not selected and there is a directive under the point, send it.
+If ARG is non-nil, do a dry run and inspect the `gptel-request' data if the
+command targeted a single directive, and not a region."
   (interactive)
-  (if (region-active-p)
-      (when-let ((toplevel-directives
-                  (cl-remove-duplicates
-                   (mapcar (lambda (inst)
-                             (e--toplevel-instruction inst 'directive))
-                           (e--instructions-in-region (region-beginning)
-                                                      (region-end)
-                                                      'directive)))))
-        (dolist (directive toplevel-directives)
-          (e--execute-directive directive)))
-    (when-let ((directive (e--toplevel-instruction (e--highest-priority-instruction
-                                                    (e--instructions-at (point) 'directive))
-                                                   'directive)))
-    (e--execute-directive directive))))
+  (cl-labels ((execute (directive)
+                (let ((being-executed (overlay-get directive 'e-being-executed)))
+                  (when being-executed
+                    (cl-return-from execute)))
+                (let ((is-dry-run (and (not (region-active-p)) arg)))
+                  (gptel-request (e--directive-llm-prompt directive)
+                    :system (e--directive-llm-system-message directive)
+                    :dry-run is-dry-run
+                    :stream nil
+                    :in-place nil
+                    :callback #'e--process-directive-llm-response
+                    :context directive)
+                  (overlay-put directive 'e-being-executed t)
+                  (e--update-instruction-overlay directive t))))
+    (if (region-active-p)
+        (when-let ((toplevel-directives
+                    (cl-remove-duplicates
+                     (mapcar (lambda (inst)
+                               (e--toplevel-instruction inst 'directive))
+                             (e--instructions-in-region (region-beginning)
+                                                        (region-end)
+                                                        'directive)))))
+          (dolist (directive toplevel-directives)
+            (execute directive))
+          (let ((directive-count (length toplevel-directives)))
+            (message "Sent %d directive%s through gptel"
+                     directive-count
+                     (if (> directive-count 1) "s" ""))))
+      (when-let ((directive (e--toplevel-instruction (e--highest-priority-instruction
+                                                      (e--instructions-at (point) 'directive))
+                                                     'directive)))
+        (execute directive)
+        (message "Sent directive request through gptel")))))
   
 (defun e-delete-instruction-at-point ()
   "Delete the instruction instruction at point."
@@ -307,6 +329,19 @@ If a region is not selected and there is a directive under the point, send it."
                    (if (= 1 instruction-count) "" "s")
                    buffer-count
                    (if (= 1 buffer-count) "" "s")))))))
+
+(cl-defun e--process-directive-llm-response (response info)
+  "Process RESPONSE string.  See `gptel-request' regarding INFO.
+
+Removes any superfluous markup formatting and indents the response according to
+the current buffer."
+  (let ((directive (plist-get info :context)))
+    (unless (overlay-buffer directive)
+      ;; Directive is gone...
+      (cl-return-from e--process-directive-llm-response))
+    (overlay-put directive 'e-being-executed nil)
+    ; (overlay-put directive 'e-instruction-type 'result)
+    (e--update-instruction-overlay directive)))
 
 (defun e--tint (source-color-name tint-color-name &optional intensity)
   "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
@@ -420,7 +455,7 @@ BODYLESS controls special formatting if non-nil."
     (overlay-put ov 'e-instruction-type 'directive)
     (overlay-put ov 'e-directive "")
     (e--update-instruction-overlay ov (not bodyless))
-    (e--directive-prompt ov) ; Switches to another buffer
+    (e--directive-prompt ov) ; This switches to another buffer.
     ov))
 
 (defun e--delete-instruction (instruction)
@@ -781,18 +816,21 @@ buffer, and the second being the content of the span itself."
         (when (and (eq end-prop :bol) (not (eq end-prop :eol)))
           (cl-decf end)
           (setq end-prop :eol))
-        (setq start-line (line-number-at-pos start t)
-              end-line (line-number-at-pos end t))
-        (cl-values (format "lines %d%s-%d%s"
-                      start-line
-                      (if (eq start-prop :bol)
-                          ""
-                        (format ":%d" start-column))
-                      end-line
-                      (if (eq end-prop :eol)
-                          ""
-                        (format ":%d" end-column)))
-                   (buffer-substring-no-properties start end))))))
+        (if (zerop end)
+            ;; If END is zero, it means that the buffer is entirely empty.
+            (cl-values "start of buffer" "")
+          (setq start-line (line-number-at-pos start t)
+                end-line (line-number-at-pos end t))
+          (cl-values (format "lines %d%s-%d%s"
+                             start-line
+                             (if (eq start-prop :bol)
+                                 ""
+                               (format ":%d" start-column))
+                             end-line
+                             (if (eq end-prop :eol)
+                                 ""
+                               (format ":%d" end-column)))
+                     (buffer-substring-no-properties start end)))))))
 
 (defun e--markdown-enquote (input-string)
   "Add Markdown blockquote to each line in INPUT-STRING."
@@ -940,13 +978,7 @@ injected directly instead of it, without replacing anything.")))
                              (expanded-directive-string directive)))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
-(cl-defun e--execute-directive (directive)
-  "Send DIRECTIVE to GPTel for evaluation."
-  (let ((being-executed (overlay-get directive 'e-being-executed)))
-    (when being-executed
-      (cl-return-from e--execute-directive)))
-  (overlay-put directive 'e-being-executed t)
-  (e--update-instruction-overlay directive t))
+
 
 (provide 'evedel)
 ;;; evedel.el ends here.
