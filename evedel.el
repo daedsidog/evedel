@@ -677,10 +677,12 @@ Does not return instructions that contain the region in its entirety the region.
   "Return a list of all Evedel instructions."
   (e--foreach-instruction inst collect inst))
 
-(defun e--toplevel-instruction (instruction &optional type)
+(cl-defun e--toplevel-instruction (instruction &optional type)
   "Return the top-level instruction containing the INSTRUCTION, if any.
 
 If TYPE is non-nil, filter by specified instruction type."
+  (unless instruction
+    (cl-return-from e--toplevel-instruction nil))
   (with-current-buffer (overlay-buffer instruction)
     (let ((toplevel-instruction
            (cl-reduce (lambda (acc inst)
@@ -1015,8 +1017,6 @@ injected directly instead of it, without replacing anything.")))
                              (instruction-path-namestring directive-buffer)
                              (expanded-directive-string directive)))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
-
-
 
 (provide 'evedel)
 ;;; evedel.el ends here.
