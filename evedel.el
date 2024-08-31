@@ -55,7 +55,7 @@
   :type 'string
   :group 'evedel)
 
-(defcustom e-directive-error-color "red"
+(defcustom e-directive-fail-color "red"
   "Color to be used as a tint for directives the model could not process."
   :type 'string
   :group 'evedel)
@@ -253,8 +253,8 @@ command will instead resize the directive in the following manner:
   (interactive)
   (when-let ((directive (e--highest-priority-instruction
                          (e--instructions-at (point) 'directive))))
-    (when (overlay-get directive 'e-being-executed)
-      (user-error "Cannot modify a directive that is being executed"))
+    (when (eq (overlay-get directive 'e-directive-status) 'processing)
+      (user-error "Cannot modify a directive that is being processed"))
     (e--directive-prompt directive)))
 
 (defun e-execute-directives (&optional arg)
@@ -266,7 +266,7 @@ If ARG is non-nil, do a dry run and inspect the `gptel-request' data if the
 command targeted a single directive, and not a region."
   (interactive)
   (cl-labels ((execute (directive)
-                (let ((being-executed (overlay-get directive 'e-being-executed)))
+                (let ((being-executed (eq 'processing (overlay-get directive 'e-directive-status))))
                   (when being-executed
                     (cl-return-from execute)))
                 (let ((is-dry-run (and (not (region-active-p)) arg)))
@@ -277,7 +277,7 @@ command targeted a single directive, and not a region."
                     :in-place nil
                     :callback #'e--process-directive-llm-response
                     :context directive)
-                  (overlay-put directive 'e-being-executed t)
+                  (overlay-put directive 'e-directive-status 'processing)
                   (e--update-instruction-overlay directive t))))
     (if (region-active-p)
         (when-let ((toplevel-directives
@@ -339,8 +339,7 @@ the current buffer."
     (unless (overlay-buffer directive)
       ;; Directive is gone...
       (cl-return-from e--process-directive-llm-response))
-    (overlay-put directive 'e-being-executed nil)
-    ; (overlay-put directive 'e-instruction-type 'result)
+    (overlay-put directive 'e-directive-status (if response 'success 'fail))
     (e--update-instruction-overlay directive)))
 
 (defun e--tint (source-color-name tint-color-name &optional intensity)
@@ -506,26 +505,39 @@ non-nil."
                   (setq label "SUBREFERENCE")
                 (setq label "REFERENCE")))
              ('directive ; DIRECTIVE
-              (let ((being-executed (overlay-get instruction 'e-being-executed)))
-                (if being-executed
-                    (setq color e-directive-processing-color)
-                  (setq color e-directive-color))
-                (if (and parent
-                         (eq (e--instruction-type parent) 'directive))
-                    (setq label "DIRECTIVE HINT")
-                  (when being-executed
-                    (setq label "PROCESSING\n\n"))
-                  (setq label (concat label "DIRECTIVE"))))
-              (let ((directive (overlay-get instruction 'e-directive)))
+              (pcase (overlay-get instruction 'e-directive-status)
+                ('processing
+                 (setq label "PROCESSING\n")
+                 (setq color e-directive-processing-color))
+                ('success
+                 (setq label "SUCCESS\n")
+                 (setq color e-directive-success-color))
+                ('fail
+                 (setq label "FAIL\n")
+                 (setq color e-directive-fail-color))
+                (_
+                 (setq color e-directive-color)))
+              (if (and parent
+                       (eq (e--instruction-type parent) 'directive))
+                  (setq label "DIRECTIVE HINT")
+                (setq label (concat label "DIRECTIVE")))
+              (let ((directive (string-trim (overlay-get instruction 'e-directive))))
                 (if (string-empty-p directive)
-                    (setq label (concat "EMPTY " label))
-                  (let ((buffer-fill-column (with-current-buffer (overlay-buffer instruction)
-                                              fill-column)))
-                    (with-temp-buffer
-                      (insert (concat label ": " directive))
-                      (let ((fill-column buffer-fill-column))
-                        (fill-region-as-paragraph (point-min) (point-max)))
-                      (setq label (buffer-string))))))))
+                    (setq label (concat "EMPTY " label ": "))
+                  (setq label (concat label ": "))
+                  (let ((padding (make-string (length label) ? )))
+                    (let ((padded-directive
+                           (with-temp-buffer
+                             (insert directive)
+                             (goto-char (point-min))
+                             (end-of-line)
+                             (while (not (eq (point) (point-max)))
+                               (forward-line)
+                               (beginning-of-line)
+                               (insert padding)
+                               (end-of-line))
+                             (buffer-string))))
+                      (setq label (concat label padded-directive))))))))
            (let* ((parent-label-color
                    (if parent
                        (overlay-get parent 'e-label-color)
@@ -535,8 +547,8 @@ non-nil."
                        (overlay-get parent 'e-bg-color)
                      (face-background 'default)))
                   (label-color (e--tint parent-label-color
-                                          color
-                                          e-instruction-label-tint-intensity))
+                                        color
+                                        e-instruction-label-tint-intensity))
                   (bg-color (e--tint parent-bg-color color e-instruction-bg-tint-intensity)))
              (overlay-put instruction 'e-bg-color bg-color)
              (overlay-put instruction 'e-label-color label-color)
