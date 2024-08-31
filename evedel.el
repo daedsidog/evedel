@@ -339,7 +339,31 @@ the current buffer."
     (unless (overlay-buffer directive)
       ;; Directive is gone...
       (cl-return-from e--process-directive-llm-response))
-    (overlay-put directive 'e-directive-status (if response 'success 'fail))
+    (cl-flet ((mark-failed (reason)
+                (overlay-put directive 'e-directive-status 'failed)
+                (overlay-put directive 'e-fail-reason reason)))
+      (if (null response)
+          (mark-failed (plist-get info :status))
+        (if (not (string-match "```+.*\n\\(\\(?:.+\\|\n\\)+\\)\n```+" response))
+            (mark-failed response)
+          (let ((parsed-response (match-string 1 response)))
+            (overlay-put directive 'e-directive-status 'succeeded)
+            (with-current-buffer (overlay-buffer directive)
+              (let ((beg (overlay-start directive))
+                    (end (overlay-end directive)))
+                (save-excursion
+                  (goto-char beg)
+                  ;; Insert a dummy character so that the overlay won't be deleted when we erase the
+                  ;; entire region spanned by the overlay.
+                  (insert " ")
+                  (delete-region (1+ beg) (1+ end))
+                  (insert parsed-response)
+                  (let ((end (point)))
+                    (setf (overlay-end directive) end)
+                    (goto-char (1+ beg))
+                    (backward-delete-char 1)
+                    (unless (eq indent-line-function #'indent-relative)
+                      (indent-region beg end))))))))))
     (e--update-instruction-overlay directive)))
 
 (defun e--tint (source-color-name tint-color-name &optional intensity)
@@ -420,10 +444,14 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
                     max-end ov-end))))))
     smallest-overlay))
 
+(defun e--bodyless-instruction-p (instr)
+  "Returns non-nil if the instruction has a body."
+  (= (overlay-start instr) (overlay-end instr)))
+
 (cl-defun e--child-instructions (instruction)
   "Return the child direcct instructions of the given INSTRUCTION overlay."
   ;; Bodyless instructions cannot have any children.
-  (when (overlay-get instruction 'e-bodyless)
+  (when (e--bodyless-instruction-p instruction)
     (cl-return-from e--child-instructions nil))
   (let ((children (remove instruction
                           (e--wholly-contained-instructions (overlay-buffer instruction)
@@ -448,8 +476,7 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
 This function switches to another buffer midway of execution.
 BODYLESS controls special formatting if non-nil."
   (let ((ov (e--create-instruction-overlay-in-region buffer start end)))
-    (if bodyless
-        (overlay-put ov 'e-bodyless t)
+    (unless bodyless
       (overlay-put ov 'evaporate t))
     (overlay-put ov 'e-instruction-type 'directive)
     (overlay-put ov 'e-directive "")
@@ -509,11 +536,11 @@ non-nil."
                 ('processing
                  (setq label "PROCESSING\n")
                  (setq color e-directive-processing-color))
-                ('success
-                 (setq label "SUCCESS\n")
+                ('succeeded
+                 (setq label "SUCCEEDED\n")
                  (setq color e-directive-success-color))
-                ('fail
-                 (setq label "FAIL\n")
+                ('failed
+                 (setq label "FAILED\n")
                  (setq color e-directive-fail-color))
                 (_
                  (setq color e-directive-color)))
@@ -568,8 +595,7 @@ non-nil."
                                                         ;; Instructions without a body (such as
                                                         ;; bodyless directives) look nicer without a
                                                         ;; newline character after the label.
-                                                        (if (overlay-get instruction
-                                                                         'e-bodyless)
+                                                        (if (e--bodyless-instruction-p instruction)
                                                             (unless instruction-is-at-eol
                                                               "\n")
                                                           "\n"))
