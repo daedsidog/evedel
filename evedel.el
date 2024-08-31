@@ -344,6 +344,7 @@ the current buffer."
                 (overlay-put directive 'e-fail-reason reason)))
       (if (null response)
           (mark-failed (plist-get info :status))
+        ;; Parse response that's delimited by Markdown code blocks.
         (if (not (string-match "```+.*\n\\(\\(?:.+\\|\n\\)+\\)\n```+" response))
             (mark-failed response)
           (let ((parsed-response (match-string 1 response)))
@@ -351,6 +352,11 @@ the current buffer."
             (with-current-buffer (overlay-buffer directive)
               (let ((beg (overlay-start directive))
                     (end (overlay-end directive)))
+                ;; Delete any child directives of the top-level directive.
+                (let ((child-directives (cl-remove-if-not #'e--directivep
+                                                          (e--child-instructions directive))))
+                  (dolist (child-directive child-directives)
+                    (e--delete-instruction child-directive)))
                 (save-excursion
                   (goto-char beg)
                   ;; Insert a dummy character so that the overlay won't be deleted when we erase the
@@ -365,6 +371,9 @@ the current buffer."
                     (unless (eq indent-line-function #'indent-relative)
                       (indent-region beg end))))))))))
     (e--update-instruction-overlay directive)))
+
+(defun e--directivep (instruction)
+  (eq (e--instruction-type instruction) 'directive))
 
 (defun e--tint (source-color-name tint-color-name &optional intensity)
   "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
@@ -754,6 +763,10 @@ DIRECTIVE-INSTRUCTION is the overlay to associate with the buffer."
   (add-hook 'after-change-functions
             (lambda (_beg _end _len)
               (overlay-put e--directive-overlay 'e-directive (buffer-string))
+              ;; Reset the status of the directive to be normal, if it is not one already.
+              (let ((status (overlay-get e--directive-overlay 'e-directive-status)))
+                (when status
+                  (overlay-put e--directive-overlay 'e-directive-status nil)))
               (e--update-instruction-overlay e--directive-overlay))
             nil t)
   (let ((map (make-sparse-keymap)))
