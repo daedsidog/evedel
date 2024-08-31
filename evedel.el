@@ -165,88 +165,33 @@ the internal bookkeeping and cleanup."
             (cl-incf restored)))))
       (message "Restored %d out of %d Evedel instructions" restored total))))
 
-(defun e--create-or-delete-instruction (type)
-  "Create or delete an instruction of the given TYPE within the selected region.
-
-If no region is selected, deletes the instruction at the current point, if any.
-
-If a region is selected but partially covers an existing instruction, then the
-function will resize it.  See either `evedel-create-or-delete-reference' or
-`evedel-create-or-delete-directive' for details on how the resizing works."
-  (if (use-region-p)
-      (let ((intersecting-instructions (e--partially-contained-instructions (current-buffer)
-                                                                            (region-beginning)
-                                                                            (region-end))))
-        (if-let ((instructions
-                  (cl-remove-if-not (lambda (inst)
-                                      (eq (e--instruction-type inst) type))
-                                    intersecting-instructions)))
-            (progn
-              (dolist (instruction instructions)
-                (if (< (overlay-start instruction) (point) (overlay-end instruction))
-                    (if (< (mark) (point))
-                        (setf (overlay-start instruction) (point))
-                      (setf (overlay-end instruction) (point)))
-                  (if (> (mark) (point))
-                      (setf (overlay-start instruction) (point))
-                    (setf (overlay-end instruction) (point))))
-                (e--update-instruction-overlay instruction))
-              (when instructions
-                (deactivate-mark)))
-          ;; Else: there are no partially contained instructions of the same type within the
-          ;; region...
-          (when intersecting-instructions
-            ;; ...but there are intersecting instructions of another type, which is bad.
-            (user-error "Cannot add intersecting instructions of different types"))
-          (let* ((buffer (current-buffer))
-                 (instruction (if (eq type 'reference)
-                                  (e--create-reference-in-region buffer
-                                                                 (region-beginning)
-                                                                 (region-end))
-                                (e--create-directive-in-region buffer
-                                                               (region-beginning)
-                                                               (region-end)))))
-            (with-current-buffer buffer (deactivate-mark))
-            instruction)))
-    ;; Else: no region is currently selected.
-    (if-let ((instruction (e--highest-priority-instruction
-                           (e--instructions-at (point) type))))
-        (e--delete-instruction instruction)
-      (when (eq type 'directive)
-        (prog1 (e--create-directive-in-region (current-buffer) (point) (point) t)
-          (deactivate-mark))))))
-
 ;;;###autoload
-(defun e-create-or-delete-reference ()
+(defun e-create-reference ()
   "Create a reference instruction within the selected region.
 
-If no region is selected, deletes the reference at the current point, if any.
-
 If a region is selected but partially covers an existing reference, then the
-command will instead resize the reference in the following manner:
+command will resize the reference in the following manner:
 
   - If the mark is located INSIDE the reference (i.e., the point is located
     OUTSIDE the reference) then the reference will be expanded to the point.
   - If the mark is located OUTSIDE the reference (i.e., the point is located
     INSIDE the reference) then the reference will be shrunk to the point."
   (interactive)
-  (e--create-or-delete-instruction 'reference))
+  (e--create-instruction 'reference))
 
 ;;;###autoload
-(defun e-create-or-delete-directive ()
+(defun e-create-directive ()
   "Create a directive instruction within the selected region.
 
-If no region is selected, deletes the directive at the current point, if any.
-
 If a region is selected but partially covers an existing directive, then the
-command will instead resize the directive in the following manner:
+command will resize the directive in the following manner:
 
   - If the mark is located INSIDE the directive (i.e., the point is located
     OUTSIDE the directive) then the directive will be expanded to the point.
   - If the mark is located OUTSIDE the directive (i.e., the point is located
     INSIDE the directive) then the directive will be shrunk to the point."
   (interactive)
-  (e--create-or-delete-instruction 'directive))
+  (e--create-instruction 'directive))
 
 (defun e-modify-directive-at-point ()
   "Modify the directive under the point."
@@ -257,22 +202,31 @@ command will instead resize the directive in the following manner:
       (user-error "Cannot modify a directive that is being processed"))
     (e--directive-prompt directive)))
 
-(defun e-execute-directives (&optional arg)
+(defun e--being-processed-p (instruction)
+  "Returns non-nil if the directive INSTRUCTION is being processed."
+  (eq (overlay-get instruction 'e-directive-status) 'processing))
+
+(defun e--directive-empty-p (directive)
+  "Check if DIRECTIVE is empty."
+  (let ((directive-text (overlay-get directive 'e-directive)))
+    (and directive-text (string-empty-p directive-text))))
+
+(defun e-execute-directives ()
   "Send directives to model via gptel.
 
 If a region is selected, send all directives within the region.
-If a region is not selected and there is a directive under the point, send it.
-If ARG is non-nil, do a dry run and inspect the `gptel-request' data if the
-command targeted a single directive, and not a region."
+If a region is not selected and there is a directive under the point, send it."
   (interactive)
   (cl-labels ((execute (directive)
-                (let ((being-executed (eq 'processing (overlay-get directive 'e-directive-status))))
-                  (when being-executed
-                    (cl-return-from execute)))
-                (let ((is-dry-run (and (not (region-active-p)) arg)))
+                (when (e--being-processed-p directive)
+                  (cl-return-from execute))
+                (if (e--directive-empty-p directive)
+                    ;; There is no point in sending an empty directive to gptel.
+                    (e--process-directive-llm-response "The directive is empty!"
+                                                       (list :context directive))
                   (gptel-request (e--directive-llm-prompt directive)
                     :system (e--directive-llm-system-message directive)
-                    :dry-run is-dry-run
+                    :dry-run nil
                     :stream nil
                     :in-place nil
                     :callback #'e--process-directive-llm-response
@@ -340,6 +294,109 @@ command targeted a single directive, and not a region."
                    buffer-count
                    (if (= 1 buffer-count) "" "s")))))))
 
+(defun e-convert-instructions ()
+  "Convert instructions between reference and directive within the selected region or at point.
+
+If a region is selected, convert all instructions within the region.
+If no region is selected, convert only the highest priority instruction at point.
+
+Bodyless directives cannot be converted to references. Attempting to do so will throw a user error."
+  (interactive)
+  (let* ((instructions (if (use-region-p)
+                           (e--partially-contained-instructions (current-buffer)
+                                                                (region-beginning)
+                                                                (region-end))
+                         (cl-remove-if #'null
+                                       (list (e--highest-priority-instruction
+                                              (e--instructions-at (point)))))))
+         (num-instructions (length instructions))
+         (converted-directives-to-references 0)
+         (converted-references-to-directives 0))
+    (if (= num-instructions 0)
+        (user-error "No instructions to convert")
+      (dolist (instr instructions)
+        (let ((start (overlay-start instr))
+              (end (overlay-end instr))
+              (buffer (overlay-buffer instr))
+              (directive-text (overlay-get instr 'e-directive)))
+          (cond
+           ((e--directivep instr)
+            (unless (e--bodyless-instruction-p instr)
+              (e--delete-instruction instr)
+              (let ((overlay (e--create-reference-in-region buffer start end)))
+                (overlay-put overlay 'e-directive directive-text))
+              (setq converted-directives-to-references (1+ converted-directives-to-references))))
+           ((e--referencep instr)
+            (e--delete-instruction instr)
+            (e--create-directive-in-region buffer start end nil (or directive-text ""))
+            (setq converted-references-to-directives (1+ converted-references-to-directives)))
+           (t
+            (user-error "Unknown instruction type")))))
+      (let ((msg "Converted %d instruction%s")
+            (conversion-msgs
+             (delq nil
+                   (list (when (> converted-directives-to-references 0)
+                           (format "%d directive%s to reference%s"
+                                   converted-directives-to-references
+                                   (if (= converted-directives-to-references 1) "" "s")
+                                   (if (= converted-directives-to-references 1) "" "s")))
+                         (when (> converted-references-to-directives 0)
+                           (format "%d reference%s to directive%s"
+                                   converted-references-to-directives
+                                   (if (= converted-references-to-directives 1) "" "s")
+                                   (if (= converted-references-to-directives 1) "" "s")))))))
+        (message (concat
+                  msg (if conversion-msgs
+                          (concat ": " (mapconcat 'identity conversion-msgs " and "))
+                        ""))
+                 num-instructions
+                 (if (> num-instructions 1) "s" ""))))))
+
+(defun e--create-instruction (type)
+  "Create or scale an instruction of the given TYPE within the selected region.
+
+If a region is selected but partially covers an existing instruction, then the
+function will resize it. See either `evedel-create-reference' or
+`evedel-create-directive' for details on how the resizing works."
+  (if (use-region-p)
+      (let ((intersecting-instructions (e--partially-contained-instructions (current-buffer)
+                                                                            (region-beginning)
+                                                                            (region-end))))
+        (if-let ((instructions
+                  (cl-remove-if-not (lambda (inst)
+                                      (eq (e--instruction-type inst) type))
+                                    intersecting-instructions)))
+            (progn
+              (dolist (instruction instructions)
+                (if (< (overlay-start instruction) (point) (overlay-end instruction))
+                    (if (< (mark) (point))
+                        (setf (overlay-start instruction) (point))
+                      (setf (overlay-end instruction) (point)))
+                  (if (> (mark) (point))
+                      (setf (overlay-start instruction) (point))
+                    (setf (overlay-end instruction) (point))))
+                (e--update-instruction-overlay instruction))
+              (when instructions
+                (deactivate-mark)))
+          ;; Else: there are no partially contained instructions of the same type within the
+          ;; region...
+          (when intersecting-instructions
+            ;; ...but there are intersecting instructions of another type, which is bad.
+            (user-error "Cannot add intersecting instructions of different types"))
+          (let* ((buffer (current-buffer))
+                 (instruction (if (eq type 'reference)
+                                  (e--create-reference-in-region buffer
+                                                                 (region-beginning)
+                                                                 (region-end))
+                                (e--create-directive-in-region buffer
+                                                               (region-beginning)
+                                                               (region-end)))))
+            (with-current-buffer buffer (deactivate-mark))
+            instruction)))
+    (when (eq type 'directive)
+      (prog1 (e--create-directive-in-region (current-buffer) (point) (point) t)
+        (deactivate-mark)))))
+
 (cl-defun e--process-directive-llm-response (response info)
   "Process RESPONSE string.  See `gptel-request' regarding INFO.
 
@@ -381,6 +438,9 @@ the current buffer."
                     (unless (eq indent-line-function #'indent-relative)
                       (indent-region beg end))))))))))
     (e--update-instruction-overlay directive)))
+
+(defun e--referencep (instruction)
+  (eq (e--instruction-type instruction) 'reference))
 
 (defun e--directivep (instruction)
   (eq (e--instruction-type instruction) 'directive))
@@ -489,18 +549,22 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
     (e--update-instruction-overlay ov t)
     ov))
 
-(defun e--create-directive-in-region (buffer start end &optional bodyless)
+(defun e--create-directive-in-region (buffer start end &optional bodyless directive-text)
   "Create a region directive from START to END in BUFFER.
 
 This function switches to another buffer midway of execution.
-BODYLESS controls special formatting if non-nil."
+BODYLESS controls special formatting if non-nil.
+
+DIRECTIVE-TEXT is used as the default directive.  Having DIRECTIVE-TEXT be
+non-nil prevents the opening of a prompt buffer."
   (let ((ov (e--create-instruction-overlay-in-region buffer start end)))
     (unless bodyless
       (overlay-put ov 'evaporate t))
     (overlay-put ov 'e-instruction-type 'directive)
-    (overlay-put ov 'e-directive "")
+    (overlay-put ov 'e-directive (or directive-text ""))
     (e--update-instruction-overlay ov (not bodyless))
-    (e--directive-prompt ov) ; This switches to another buffer.
+    (unless directive-text
+      (e--directive-prompt ov)) ; This switches to another buffer.
     ov))
 
 (defun e--delete-instruction (instruction)
@@ -631,17 +695,17 @@ non-nil."
                  (setq color e-directive-color)))
               (let (sublabel)
                 (if (and parent
-                         (eq (e--instruction-type parent) 'directive))
+                         (e--directivep parent))
                     (setq sublabel "DIRECTIVE HINT")
                   (setq sublabel (concat sublabel "DIRECTIVE")))
                 (let ((directive (string-trim (overlay-get instruction 'e-directive))))
                   (if (string-empty-p directive)
-                      (setq label (concat "EMPTY " sublabel))
-                    (setq sublabel (concat sublabel ": "))
-                    (setq label (concat label
-                                        (e--fill-label-string directive
-                                                              sublabel
-                                                              (overlay-buffer instruction)))))))))
+                      (setq sublabel (concat "EMPTY " sublabel))
+                    (setq sublabel (concat sublabel ": ")))
+                  (setq label (concat label
+                                      (e--fill-label-string directive
+                                                            sublabel
+                                                            (overlay-buffer instruction))))))))
            (let* ((parent-label-color
                    (if parent
                        (overlay-get parent 'e-label-color)
@@ -757,7 +821,7 @@ Does not return instructions that contain the region in its entirety the region.
 (cl-defun e--toplevel-instruction (instruction &optional type)
   "Return the top-level instruction containing the INSTRUCTION, if any.
 
-If TYPE is non-nil, filter by specified instruction type."
+If TYPE is non-nil, filter by specified instruction type.
   (unless instruction
     (cl-return-from e--toplevel-instruction nil))
   (with-current-buffer (overlay-buffer instruction)
