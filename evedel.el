@@ -155,7 +155,7 @@ the internal bookkeeping and cleanup."
       (dolist (instr loaded-instructions)
         (cl-destructuring-bind (&key file buffer overlay-start overlay-end properties) instr
           (cond
-           ((file-exists-p file)
+           ((and file (file-exists-p file))
             (with-current-buffer (find-file-noselect file)
               (e--restore-overlay (current-buffer) overlay-start overlay-end properties))
             (cl-incf restored))
