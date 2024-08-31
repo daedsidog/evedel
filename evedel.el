@@ -293,11 +293,21 @@ command targeted a single directive, and not a region."
             (message "Sent %d directive%s through gptel"
                      directive-count
                      (if (> directive-count 1) "s" ""))))
-      (when-let ((directive (e--toplevel-instruction (e--highest-priority-instruction
-                                                      (e--instructions-at (point) 'directive))
-                                                     'directive)))
-        (execute directive)
-        (message "Sent directive request through gptel")))))
+      (if-let ((directive (e--toplevel-instruction (e--highest-priority-instruction
+                                                    (e--instructions-at (point) 'directive))
+                                                   'directive)))
+          (progn
+            (execute directive)
+            (message "Sent directive request through gptel"))
+        (when-let ((toplevel-directives (cl-remove-duplicates
+                                         (mapcar (lambda (inst)
+                                                   (e--toplevel-instruction inst 'directive))
+                                                 (e--instructions-in-region (point-min)
+                                                                            (point-max)
+                                                                            'directive)))))
+          (dolist (dir toplevel-directives)
+            (execute dir))
+          (message "Sent all directives in current buffer to gptel"))))))
   
 (defun e-delete-instruction-at-point ()
   "Delete the instruction instruction at point."
@@ -341,7 +351,7 @@ the current buffer."
       (cl-return-from e--process-directive-llm-response))
     (cl-flet ((mark-failed (reason)
                 (overlay-put directive 'e-directive-status 'failed)
-                (overlay-put directive 'e-fail-reason reason)))
+                (overlay-put directive 'e-directive-fail-reason reason)))
       (if (null response)
           (mark-failed (plist-get info :status))
         ;; Parse response that's delimited by Markdown code blocks.
@@ -515,6 +525,67 @@ BODYLESS controls special formatting if non-nil."
       (goto-char pos)
       (= pos (pos-bol)))))
 
+(defun e--fill-label-string (string &optional prefix-string buffer)
+  "Fill STRING into its label.
+
+If PREFIX-STRING is not nil, whitespace padding is added at the start of
+every newline in STRING so that it aligns visually under PREFIX-STRING.
+
+If BUFFER is provided, STRING will be wrapped to not overflow the fill column
+of BUFFER.  Wrapping will attempt to respect word boundaries and only hyphenate
+words as a last resort if a word is too long to fit on a line by itself."
+  (let* ((padding (if prefix-string
+                      (make-string (length prefix-string) ? )
+                    ""))
+         (padding-fill-column (if buffer
+                                  (- (with-current-buffer buffer
+                                       fill-column)
+                                     (length padding))
+                                nil)))
+    (when (< padding-fill-column (length prefix-string))
+      (setq padding-fill-column nil))
+    (with-temp-buffer
+      (when fill-column
+        (let ((fill-column padding-fill-column))
+          (insert string " ") ; The whitespace is so that large words at the EOB will be wrapped.
+          (goto-char (point-min))
+          (catch 'search-end
+            (while t
+              (beginning-of-line)
+              (let ((beg (point)))
+                (let (best-col-pos
+                      (lineno (line-number-at-pos beg)))
+                  (while (and (= (line-number-at-pos (point)) lineno)
+                              (< (current-column) fill-column))
+                    (setq best-col-pos (point))
+                    (condition-case nil
+                        (re-search-forward "\\s-+")
+                      (error
+                       (throw 'search-end nil))))
+                  (goto-char best-col-pos)
+                  (let ((eol-col (save-excursion (end-of-line) (current-column))))
+                    (if (>= eol-col fill-column)
+                        (progn
+                          (when (bolp)
+                            (forward-char (1- fill-column))
+                            (insert "-"))
+                          (save-excursion
+                            (end-of-line)
+                            (unless (>= (current-column) fill-column)
+                              (delete-char 1)
+                              (insert " ")))
+                          (insert "\n"))
+                      (forward-line)))))))))
+      (goto-char (point-min))
+      (forward-line)
+      (while (not (eobp))
+        (insert padding)
+        (beginning-of-line)
+        (forward-line))
+      (goto-char (point-min))
+      (insert prefix-string)
+      (string-trim (buffer-string)))))
+
 (defun e--update-instruction-overlay (instruction &optional update-children)
   "Update the appearance of the INSTRUCTION overlay.
 
@@ -549,31 +620,28 @@ non-nil."
                  (setq label "SUCCEEDED\n")
                  (setq color e-directive-success-color))
                 ('failed
-                 (setq label "FAILED\n")
+                 (setq label (concat
+                              (e--fill-label-string (overlay-get instruction
+                                                                 'e-directive-fail-reason)
+                                                    "FAILED: "
+                                                    (overlay-buffer instruction))
+                              "\n"))
                  (setq color e-directive-fail-color))
                 (_
                  (setq color e-directive-color)))
-              (if (and parent
-                       (eq (e--instruction-type parent) 'directive))
-                  (setq label "DIRECTIVE HINT")
-                (setq label (concat label "DIRECTIVE")))
-              (let ((directive (string-trim (overlay-get instruction 'e-directive))))
-                (if (string-empty-p directive)
-                    (setq label (concat "EMPTY " label ": "))
-                  (setq label (concat label ": "))
-                  (let ((padding (make-string (length label) ? )))
-                    (let ((padded-directive
-                           (with-temp-buffer
-                             (insert directive)
-                             (goto-char (point-min))
-                             (end-of-line)
-                             (while (not (eq (point) (point-max)))
-                               (forward-line)
-                               (beginning-of-line)
-                               (insert padding)
-                               (end-of-line))
-                             (buffer-string))))
-                      (setq label (concat label padded-directive))))))))
+              (let (sublabel)
+                (if (and parent
+                         (eq (e--instruction-type parent) 'directive))
+                    (setq sublabel "DIRECTIVE HINT")
+                  (setq sublabel (concat sublabel "DIRECTIVE")))
+                (let ((directive (string-trim (overlay-get instruction 'e-directive))))
+                  (if (string-empty-p directive)
+                      (setq label (concat "EMPTY " sublabel))
+                    (setq sublabel (concat sublabel ": "))
+                    (setq label (concat label
+                                        (e--fill-label-string directive
+                                                              sublabel
+                                                              (overlay-buffer instruction)))))))))
            (let* ((parent-label-color
                    (if parent
                        (overlay-get parent 'e-label-color)
@@ -987,6 +1055,13 @@ replacing it."
 injected directly instead of it, without replacing anything.")))
           (insert
            (concat
+            "\n\n"
+            "If you cannot complete your directive or something is unclear to you, be it due to \
+missing information or due to the directive asking something outside your abilities, do not guess \
+or proceed. Instead, reply with a question or clarification that does not contain Markdown code \
+blocks. A response without Markdown code blocks is invalidated, and its contents will be displayed \
+to the user as a failure reason. Be very strict, and announce failure even at the slightest \
+discrepancy."
             "\n\n"
             (format "## Reference%s%s"
                     (if (> reference-count 1) "s" "")
