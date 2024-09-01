@@ -1,40 +1,117 @@
-* Evedel: Instructed LLM programmer/assistant
+* Evedel: Instructed LLM Programmer/Assistant
 
-Evedel is a [[https://github.com/karthink/gptel][gptel]] extension Emacs package specialized for ergonomic programming with an LLM. The
-goal is to shift the programmer's workload from manually writing code to instead write detailed,
-thought-out instructions for the model on how to write the code, while supplying it with references
-so that it may better understand the working environment.
+*This is a fledgling project. Expect lots of bugs and missing features.*
 
-Evedel can also be used in non-programming buffers.
+[[file:media/promo.png]]
+
+Evedel is an extension to the [[https://github.com/karthink/gptel][GPTel]] Emacs package that enhances the workflow of interacting with large language models during programmer. Its primary aim is to shift workload from manually writing code to creating detailed, thoughtful instruction labels for the LLM models, leveraging references to provide contextual understanding of the working environment.
+
+Evedel is versatile enough so that it can be utilized in various types of buffers, and isn't limited to just programming buffers.
+
+** Features
+
+- Simple to use
+- Uses [[https://github.com/karthink/gptel][GPTel]] as a backend, so no extra setup is necessary if you already use it.
+- Uses overlays for tracking instructions instead of raw text, which means that the instructions are not part of your file or buffer. The overlays are mostly intuitive and can be customized.
+- Has the ability to save your instruction overlays so you won't have to restart the instruction labeling process every time you start a new Emacs session.
 
 ** Usage
 
-The most straightforward way to use this package is creating what is known as references and
-directives. Directives are the prompts you send to the model, and references are extra information
-that is propagated to the model in order to complete the directive.
+Evedel's function revolves around the creation and manipulation of references and directives within your Emacs buffers. Directives are prompts you send to the model, while references provide context to help complete these directives more accurately.
 
-*** References
+[[file:media/basic-demo.gif]]
 
-You can create references by selecting a region of text inside a buffer and invoking the DWIM
-=evedel-create-or-delete-reference= command. You may have nested references.
+|---------------------------+-----------------------------------------------------------------------|
+| *Creation & Modification* | Command Description                                                   |
+|---------------------------+-----------------------------------------------------------------------|
+| =evedel-create-reference= | Create or resize a reference instruction within a region.             |
+| =evedel-create-directive= | Create or resize a directive instruction at point or within a region. |
+| =evedel-modify-directive= | Modify an existing directive instruction at point.                    |
+|---------------------------+-----------------------------------------------------------------------|
 
-Invoking this command without a region selected will try to erase the "top-layer" reference at the
-point.
+|-------------------------------+----------------------------------------------------------------------------|
+| *Processing & Management*     |                                                                            |
+|-------------------------------+----------------------------------------------------------------------------|
+| =evedel-save-instructions=    | Save current instruction overlays to a specified file.                     |
+| =evedel-load-instructions=    | Load instruction overlays from a specified file.                           |
+| =evedel-process-directives=   | Process directives by sending them to GPTel.                               |
+| =evedel-delete-instructions=  | Remove instructions either at point or within the selected region.         |
+| =evedel-delete-all=           | Delete all Evedel instructions across all buffers.                         |
+| =evedel-convert-instructions= | Convert between reference and directive types at point or within a region. |
+|-------------------------------+----------------------------------------------------------------------------|
 
-*** Directives
+Note:
+- For =evedel-process-directives=:
+  - If at point: sends the directive under the point.
+  - If a region is selected: sends all directives within the selected region.
+  - Otherwise, processes all directives in the current buffer.
+- If the region mark started from outside the reference/directive overlay and a part of it is within the selected region, the instruction will be "shrunk" to fit the new region boundaries.
+- If the region mark started from inside the reference/directive overlay, the instruction will grow to include the entire new selection.
 
-You can create directives by selecting a region of text inside a buffer and invoking the DWIM
-=evedel-create-or-delete-directive= command. You may have nested directives.
+Below is an example of scaling existing instruction overlay (in this case, a reference) by invoking the =evedel-create-reference= command within a region that contains one:
 
-Invoking this command without a region selected will try to erase the "top-layer" directive at the
-point.
+[[file:media/scaling-demo.gif]]
 
-Invoking this command without a region selected and not having a directive under the point will
-instead create a directive with an empty body.
+|-------------------------------------------+--------------------------------------------------|
+| *Custom Variables*                        | Description                                      |
+|-------------------------------------------+--------------------------------------------------|
+| =evedel-reference-color=                  | Tint color for reference overlays                |
+| =evedel-directive-color=                  | Tint color for directive overlays                |
+| =evedel-directive-processing-color=       | Tint color for directives being processed        |
+| =evedel-directive-success-color=          | Tint color for successfully processed directives |
+| =evedel-directive-fail-color=             | Tint color for failed directives                 |
+| =evedel-instruction-bg-tint-intensity=    | Intensity for instruction background tint        |
+| =evedel-instruction-label-tint-intensity= | Intensity for instruction label tint             |
+| =evedel-descriptive-mode-roles=           | Major modes to model roles association list      |
+|-------------------------------------------+--------------------------------------------------|
+
+** Setup
+
+Before proceeding, make sure you have [[https://github.com/karthink/gptel][GPTel]] configured. *This package will not work without it.*
+
+Clone the Evedel repository:
+   
+#+begin_src sh
+git clone https://github.com/daedsidog/evedel.git
+#+end_src
+
+Add the path to the cloned repository in your Emacs configuration. You can do this by adding the following code to your =init.el= or =config.el= file:
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "/path/to/evedel")
+#+end_src
+
+Use =use-package= to configure Evedel as shown in the snippet below:
+
+#+begin_src emacs-lisp
+(use-package evedel
+  :bind (("C-c e r" . evedel-create-reference)
+         ("C-c e d" . evedel-create-directive)
+         ("C-c e s" . evedel-save-instructions)
+         ("C-c e l" . evedel-load-instructions)
+         ("C-c e p" . evedel-process-directives)
+         ("C-c e m" . evedel-modify-directive)
+         ("C-c e k" . evedel-delete-instructions)
+         ("C-c e c" . evedel-convert-instructions)))
+#+end_src
+   
+Make sure to replace ="/path/to/evedel"= with the actual path where you cloned the Evedel repository.
+
+
+  
+** Planned Features
+
+- Instruction navigation/listing/aggregation
+- Reference categorization
+- Auto-save/loading
+- LLM request logging
+- Diff facilities
+- Better overlay tracking on changes
+- Instruction undoing/history
+- Advanced directive processing
 
 ** Acknowledgments
 
-- [[https://github.com/karthink][Karthik Chikmagalur]] for the [[https://github.com/karthink/gptel][gptel]] package
-- [[https://github.com/tarsius][Jonas Bernoulli]] for the [[https://github.com/magit/transient][Transient]] library
+- Special thanks to [[https://github.com/karthink][Karthik Chikmagalur]] for the excellent [[https://github.com/karthink/gptel][GPTel]] package
 
-#  LocalWords:  LLM Evedel DWIM
+#  LocalWords:  LLM Evedel DWIM Evedel's GPTel evedel backend
