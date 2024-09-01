@@ -1,3 +1,4 @@
+
 ;;; evedel.el --- Instructed LLM programmer/assistant for Emacs -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024  daedsidog
@@ -179,7 +180,7 @@ command will resize the reference in the following manner:
   - If the mark is located OUTSIDE the reference (i.e., the point is located
     INSIDE the reference) then the reference will be shrunk to the point."
   (interactive)
-  (e--create-instruction 'reference))
+  (e--create-instruction :reference))
 
 ;;;###autoload
 (defun e-create-directive ()
@@ -193,14 +194,14 @@ command will resize the directive in the following manner:
   - If the mark is located OUTSIDE the directive (i.e., the point is located
     INSIDE the directive) then the directive will be shrunk to the point."
   (interactive)
-  (e--create-instruction 'directive))
+  (e--create-instruction :directive))
 
 (defun e-modify-directive ()
   "Modify the directive under the point."
   (interactive)
   (when-let ((directive (e--highest-priority-instruction
-                         (e--instructions-at (point) 'directive))))
-    (when (eq (overlay-get directive 'e-directive-status) 'processing)
+                         (e--instructions-at (point) :directive))))
+    (when (eq (overlay-get directive 'e-directive-status) :processing)
       (user-error "Cannot modify a directive that is being processed"))
     (e--directive-prompt directive)))
 
@@ -224,16 +225,16 @@ If a region is not selected and there is a directive under the point, send it."
                     :in-place nil
                     :callback #'e--process-directive-llm-response
                     :context directive)
-                  (overlay-put directive 'e-directive-status 'processing)
+                  (overlay-put directive 'e-directive-status :processing)
                   (e--update-instruction-overlay directive t))))
     (if (region-active-p)
         (when-let ((toplevel-directives
                     (cl-remove-duplicates
                      (mapcar (lambda (inst)
-                               (e--topmost-instruction inst 'directive))
+                               (e--topmost-instruction inst :directive))
                              (e--instructions-in-region (region-beginning)
                                                         (region-end)
-                                                        'directive)))))
+                                                        :directive)))))
           (dolist (directive toplevel-directives)
             (execute directive))
           (let ((directive-count (length toplevel-directives)))
@@ -241,17 +242,17 @@ If a region is not selected and there is a directive under the point, send it."
                      directive-count
                      (if (> directive-count 1) "s" ""))))
       (if-let ((directive (e--topmost-instruction (e--highest-priority-instruction
-                                                    (e--instructions-at (point) 'directive))
-                                                   'directive)))
+                                                    (e--instructions-at (point) :directive))
+                                                   :directive)))
           (progn
             (execute directive)
             (message "Sent directive to gptel for processing"))
         (when-let ((toplevel-directives (cl-remove-duplicates
                                          (mapcar (lambda (inst)
-                                                   (e--topmost-instruction inst 'directive))
+                                                   (e--topmost-instruction inst :directive))
                                                  (e--instructions-in-region (point-min)
                                                                             (point-max)
-                                                                            'directive)))))
+                                                                            :directive)))))
           (dolist (dir toplevel-directives)
             (execute dir))
           (message "Sent all directives in current buffer to gptel for processing"))))))
@@ -375,8 +376,8 @@ Returns the deleted instruction overlay."
       (e--delete-instruction target))))
 
 (defun e--being-processed-p (instruction)
-  "Returns non-nil if the directive INSTRUCTION is being processed."
-  (eq (overlay-get instruction 'e-directive-status) 'processing))
+  "Return non-nil if the directive INSTRUCTION is being processed."
+  (eq (overlay-get instruction 'e-directive-status) :processing))
 
 (defun e--directive-empty-p (directive)
   "Check if DIRECTIVE is empty."
@@ -415,7 +416,7 @@ function will resize it. See either `evedel-create-reference' or
             ;; ...but there are intersecting instructions of another type, which is bad.
             (user-error "Cannot add intersecting instructions of different types"))
           (let* ((buffer (current-buffer))
-                 (instruction (if (eq type 'reference)
+                 (instruction (if (eq type :reference)
                                   (e--create-reference-in-region buffer
                                                                  (region-beginning)
                                                                  (region-end))
@@ -424,7 +425,7 @@ function will resize it. See either `evedel-create-reference' or
                                                                (region-end)))))
             (with-current-buffer buffer (deactivate-mark))
             instruction)))
-    (when (eq type 'directive)
+    (when (eq type :directive)
       (prog1 (e--create-directive-in-region (current-buffer) (point) (point) t)
         (deactivate-mark)))))
 
@@ -438,7 +439,7 @@ the current buffer."
       ;; Directive is gone...
       (cl-return-from e--process-directive-llm-response))
     (cl-flet ((mark-failed (reason)
-                (overlay-put directive 'e-directive-status 'failed)
+                (overlay-put directive 'e-directive-status :failed)
                 (overlay-put directive 'e-directive-fail-reason reason)))
       (if (null response)
           (mark-failed (plist-get info :status))
@@ -446,7 +447,7 @@ the current buffer."
         (if (not (string-match "```+.*\n\\(\\(?:.+\\|\n\\)+\\)\n```+" response))
             (mark-failed response)
           (let ((parsed-response (match-string 1 response)))
-            (overlay-put directive 'e-directive-status 'succeeded)
+            (overlay-put directive 'e-directive-status :succeeded)
             (with-current-buffer (overlay-buffer directive)
               (let ((beg (overlay-start directive))
                     (end (overlay-end directive)))
@@ -468,13 +469,13 @@ the current buffer."
                     (backward-delete-char 1)
                     (unless (eq indent-line-function #'indent-relative)
                       (indent-region beg end))))))))))
-    (e--update-instruction-overlay directive)))
+    (e--update-instruction-overlay directive t)))
 
 (defun e--referencep (instruction)
-  (eq (e--instruction-type instruction) 'reference))
+  (eq (e--instruction-type instruction) :reference))
 
 (defun e--directivep (instruction)
-  (eq (e--instruction-type instruction) 'directive))
+  (eq (e--instruction-type instruction) :directive))
 
 (defun e--tint (source-color-name tint-color-name &optional intensity)
   "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
@@ -575,7 +576,7 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
 (defun e--create-reference-in-region (buffer start end)
   "Create a region reference from START to END in BUFFER."
   (let ((ov (e--create-instruction-overlay-in-region buffer start end)))
-    (overlay-put ov 'e-instruction-type 'reference)
+    (overlay-put ov 'e-instruction-type :reference)
     (overlay-put ov 'evaporate t)
     (e--update-instruction-overlay ov t)
     ov))
@@ -591,7 +592,7 @@ non-nil prevents the opening of a prompt buffer."
   (let ((ov (e--create-instruction-overlay-in-region buffer start end)))
     (unless bodyless
       (overlay-put ov 'evaporate t))
-    (overlay-put ov 'e-instruction-type 'directive)
+    (overlay-put ov 'e-instruction-type :directive)
     (overlay-put ov 'e-directive (or directive-text ""))
     (e--update-instruction-overlay ov (not bodyless))
     (unless directive-text
@@ -696,99 +697,107 @@ Also updates the child instructions of the INSTRUCTION, if UPDATE-CHILDREN is
 non-nil."
   (unless (e--instruction-p instruction)
     (error "%s is not an instruction overlay" instruction))
-  (cl-labels
-      ((aux (instruction &optional update-children priority (parent nil))
-         (let ((instruction-type (e--instruction-type instruction))
-               (label "")
-               color)
-           ;; Instruction-specific updates
-           (pcase instruction-type
-             ('reference ; REFERENCE
-              (setq color e-reference-color)
-              (if (and parent
-                       (eq (e--instruction-type parent) 'reference))
-                  (setq label "SUBREFERENCE")
-                (setq label "REFERENCE")))
-             ('directive ; DIRECTIVE
-              (pcase (overlay-get instruction 'e-directive-status)
-                ('processing
-                 (setq label "PROCESSING\n")
-                 (setq color e-directive-processing-color))
-                ('succeeded
-                 (setq label "SUCCEEDED\n")
-                 (setq color e-directive-success-color))
-                ('failed
-                 (setq label (concat
-                              (e--fill-label-string (overlay-get instruction
-                                                                 'e-directive-fail-reason)
-                                                    "FAILED: "
-                                                    (overlay-buffer instruction))
-                              "\n"))
-                 (setq color e-directive-fail-color))
-                (_
-                 (setq color e-directive-color)))
-              (let (sublabel)
+  (let ((topmost-directive nil))
+    (cl-labels
+        ((directive-color (directive)
+           (pcase (overlay-get (if topmost-directive
+                                   topmost-directive
+                                 directive)
+                               'e-directive-status)
+             (:processing e-directive-processing-color)
+             (:succeeded  e-directive-success-color)
+             (:failed     e-directive-fail-color)
+             (_           e-directive-color)))
+         (aux (instruction &optional update-children priority (parent nil))
+           (let ((instruction-type (e--instruction-type instruction))
+                 (label "")
+                 color)
+             (pcase instruction-type
+               (:reference ; REFERENCE
+                (setq color e-reference-color)
                 (if (and parent
-                         (e--directivep parent))
-                    (setq sublabel "DIRECTIVE HINT")
-                  (setq sublabel (concat sublabel "DIRECTIVE")))
-                (let ((directive (string-trim (overlay-get instruction 'e-directive))))
-                  (if (string-empty-p directive)
-                      (setq sublabel (concat "EMPTY " sublabel))
-                    (setq sublabel (concat sublabel ": ")))
-                  (setq label (concat label
-                                      (e--fill-label-string directive
-                                                            sublabel
-                                                            (overlay-buffer instruction))))))))
-           (let* ((parent-label-color
-                   (if parent
-                       (overlay-get parent 'e-label-color)
-                     (face-foreground 'default)))
-                  (parent-bg-color
-                   (if parent
-                       (overlay-get parent 'e-bg-color)
-                     (face-background 'default)))
-                  (label-color (e--tint parent-label-color
-                                        color
-                                        e-instruction-label-tint-intensity))
-                  (bg-color (e--tint parent-bg-color color e-instruction-bg-tint-intensity)))
-             (overlay-put instruction 'e-bg-color bg-color)
-             (overlay-put instruction 'e-label-color label-color)
-             (overlay-put instruction 'priority priority)
-             (let (instruction-is-at-eol
-                   instruction-is-at-bol)
-               (with-current-buffer (overlay-buffer instruction)
-                 (save-excursion
-                   (goto-char (overlay-end instruction))
-                   (setq instruction-is-at-eol (= (point) (pos-eol)))
-                   (goto-char (overlay-start instruction))
-                   (setq instruction-is-at-bol (= (point) (pos-bol)))))
+                         (eq (e--instruction-type parent) :reference))
+                    (setq label "SUBREFERENCE")
+                  (setq label "REFERENCE")))
+               (:directive ; DIRECTIVE
+                (when (and (null topmost-directive) (overlay-get instruction
+                                                                 'e-directive-status))
+                  (setq topmost-directive instruction))
+                (pcase (overlay-get instruction 'e-directive-status)
+                  (:processing (setq label "PROCESSING\n"))
+                  (:succeeded (setq label "SUCCEEDED\n"))
+                  (:failed
+                   (setq label (concat
+                                (e--fill-label-string (overlay-get instruction
+                                                                   'e-directive-fail-reason)
+                                                      "FAILED: "
+                                                      (overlay-buffer instruction))
+                                "\n"))))
+                (setq color (directive-color instruction))
+                (let (sublabel)
+                  (if (and parent
+                           (e--directivep parent))
+                      (setq sublabel "DIRECTIVE HINT")
+                    (setq sublabel (concat sublabel "DIRECTIVE")))
+                  (let ((directive (string-trim (overlay-get instruction 'e-directive))))
+                    (if (string-empty-p directive)
+                        (setq sublabel (concat "EMPTY " sublabel))
+                      (setq sublabel (concat sublabel ": ")))
+                    (setq label (concat
+                                 label
+                                 (e--fill-label-string directive
+                                                       sublabel
+                                                       (overlay-buffer instruction))))))))
+             (let* ((parent-label-color
+                     (if parent
+                         (overlay-get parent 'e-label-color)
+                       (face-foreground 'default)))
+                    (parent-bg-color
+                     (if parent
+                         (overlay-get parent 'e-bg-color)
+                       (face-background 'default)))
+                    (label-color (e--tint parent-label-color
+                                          color
+                                          e-instruction-label-tint-intensity))
+                    (bg-color (e--tint parent-bg-color color e-instruction-bg-tint-intensity)))
+               (overlay-put instruction 'e-bg-color bg-color)
+               (overlay-put instruction 'e-label-color label-color)
+               (overlay-put instruction 'priority priority)
+               (let (instruction-is-at-eol
+                     instruction-is-at-bol)
+                 (with-current-buffer (overlay-buffer instruction)
+                   (save-excursion
+                     (goto-char (overlay-end instruction))
+                     (setq instruction-is-at-eol (= (point) (pos-eol)))
+                     (goto-char (overlay-start instruction))
+                     (setq instruction-is-at-bol (= (point) (pos-bol)))))
+                 (overlay-put instruction
+                              'before-string
+                              (concat (unless instruction-is-at-bol "\n")
+                                      (propertize (concat
+                                                   label
+                                                   ;; Instructions without a body (such as bodyless
+                                                   ;; directives) look nicer without a newline
+                                                   ;; character after the label.
+                                                   (if (e--bodyless-instruction-p instruction)
+                                                       (unless instruction-is-at-eol
+                                                         "\n")
+                                                     "\n"))
+                                                  'face (list :extend t
+                                                              :inherit 'default
+                                                              :foreground label-color
+                                                              :background bg-color)))))
                (overlay-put instruction
-                            'before-string
-                            (concat (unless instruction-is-at-bol "\n")
-                                    (propertize (concat label
-                                                        ;; Instructions without a body (such as
-                                                        ;; bodyless directives) look nicer without a
-                                                        ;; newline character after the label.
-                                                        (if (e--bodyless-instruction-p instruction)
-                                                            (unless instruction-is-at-eol
-                                                              "\n")
-                                                          "\n"))
-                                                'face (list :extend t
-                                                            :inherit 'default
-                                                            :foreground label-color
-                                                            :background bg-color)))))
-             (overlay-put instruction
-                          'face
-                          `(:extend t :background ,bg-color))))
-         (when update-children
-           (dolist (child (e--child-instructions instruction))
-             (aux child update-children (1+ priority) instruction)))))
-    (let ((parent (e--parent-instruction instruction)))
-      (let ((priority (if parent
-                          (1+ (overlay-get parent 'priority))
-                        e--default-instruction-priority)))
-        (aux instruction update-children priority parent)))))
+                            'face
+                            `(:extend t :background ,bg-color))))
+           (when update-children
+             (dolist (child (e--child-instructions instruction))
+               (aux child update-children (1+ priority) instruction)))))
+      (let ((parent (e--parent-instruction instruction)))
+        (let ((priority (if parent
+                            (1+ (overlay-get parent 'priority))
+                          e--default-instruction-priority)))
+          (aux instruction update-children priority parent))))))
 
 (defun e--restore-overlay (buffer overlay-start overlay-end properties)
   "Helper function to restore an instruction overlay in BUFFER.
@@ -860,7 +869,10 @@ If OF-TYPE is nil, the instruction returned is the top-level one."
   (unless instruction
     (cl-return-from e--topmost-instruction nil))
   (with-current-buffer (overlay-buffer instruction)
-    (let ((best-instruction instruction))
+    (let ((best-instruction (if of-type
+                                (when (eq (e--instruction-type instruction) of-type)
+                                  instruction)
+                              instruction)))
       (cl-labels ((parent-instr (instr)
                     (if-let ((parent (e--parent-instruction instr)))
                         (progn
@@ -868,7 +880,7 @@ If OF-TYPE is nil, the instruction returned is the top-level one."
                             (setq best-instruction parent))
                           (parent-instr parent))
                       best-instruction)))
-        (parent-instr best-instruction)))))
+        (parent-instr instruction)))))
 
 (defun e--recreate-instructions ()
   "Recreate all instructions.  Used for debugging purposes."
@@ -883,10 +895,10 @@ If OF-TYPE is nil, the instruction returned is the top-level one."
     (dolist (instruction instructions)
       (cl-destructuring-bind (&key start end buffer type) instruction
         (pcase type
-          ('reference
+          (:reference
            (e--create-reference-in-region buffer start end)
            (cl-incf recreated))
-          ('directive
+          (:directive
            (e--create-directive-in-region buffer start end)
            (cl-incf recreated)))))
     (when (called-interactively-p 'interactive)
@@ -930,7 +942,7 @@ DIRECTIVE-INSTRUCTION is the overlay to associate with the buffer."
               (let ((status (overlay-get e--directive-overlay 'e-directive-status)))
                 (when status
                   (overlay-put e--directive-overlay 'e-directive-status nil)))
-              (e--update-instruction-overlay e--directive-overlay))
+              (e--update-instruction-overlay e--directive-overlay t))
             nil t)
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") 'e--directive-apply-function)
@@ -998,6 +1010,27 @@ Returns the message as a string."
       (setq backticks (concat backticks "`")))
     backticks))
 
+(defun e--preview-directive-llm-prompt-at-point ()
+  "Preview directive prompt at the current point.  Useful for debugging."
+  (interactive)
+  (let ((directive (e--topmost-instruction (car (e--instructions-at (point) :directive))
+                                           :directive)))
+    (let ((request-string (e--directive-llm-prompt directive)))
+      (let ((bufname "*evedel-directive-preview*"))
+        (with-output-to-temp-buffer bufname
+          (princ (format "<!-- SYSTEM: %s -->"
+                         (replace-regexp-in-string "\n"
+                                                   "\n# "
+                                                   (e--directive-llm-system-message directive))))
+          (princ "\n\n")
+          (princ request-string)
+          (with-current-buffer bufname
+            (markdown-mode)
+            (read-only-mode 1)
+            (visual-line-mode 1)
+            (display-line-numbers-mode 1)
+            (local-set-key (kbd "q") 'quit-window)))))))
+    
 (defun e--overlay-region-info (overlay)
   "Return region span information of OVERLAY in its buffer.
 
@@ -1059,7 +1092,8 @@ buffer, and the second being the content of the span itself."
 Returns the prompt as a string."
   (let* ((is-programmer (derived-mode-p 'prog-mode))
          (toplevel-references (e--foreach-instruction
-                                  inst when (eq (e--topmost-instruction inst 'reference) inst)
+                                  inst when (and (e--referencep inst)
+                                                 (eq (e--topmost-instruction inst :reference) inst))
                                   collect inst))
          ;; The references in the reference alist should be sorted by their order of appearance
          ;; in the buffer.
@@ -1073,7 +1107,7 @@ Returns the prompt as a string."
                                                                     (overlay-start y)))))
                                              (cl-return alist))))
          (reference-count (length toplevel-references))
-         (directive-toplevel-reference (e--topmost-instruction directive 'reference))
+         (directive-toplevel-reference (e--topmost-instruction directive :reference))
          (directive-buffer (overlay-buffer directive))
          ;; Should the directive buffer have a valid file path, we should use a relative path for
          ;; the other references, assuming that they too have a valid file path.
@@ -1082,7 +1116,14 @@ Returns the prompt as a string."
         (e--overlay-region-info directive)
       ;; This marking function is used to mark the prompt text so that it may later be formatted by
       ;; sections, should the need to do so will arise.
-      (cl-labels ((capitalize-first-letter (s)
+      (cl-labels ((response-directive-guide-text ()
+                    (if (e--bodyless-instruction-p directive)
+                      "Note that your response will be injected in the position the directive is \
+embedded in, so be mindful not to return anything superfluous that surrounds the embedded \
+directive."
+                      "Note that your response will replace the region spanned by the embedded \
+directive, so be mindful not to return anything superflous that surrounds it."))
+                  (capitalize-first-letter (s)
                     (if (> (length s) 0)
                         (concat (upcase (substring s 0 1)) (downcase (substring s 1)))
                       nil))
@@ -1095,10 +1136,10 @@ Returns the prompt as a string."
                                      (file-name-parent-directory directive-filename)))
                           (format "buffer `%s`" (buffer-name buffer)))
                       (format "buffer `%s`" (buffer-name buffer))))
-                  (expanded-directive-string (directive)
+                  (expanded-directive-text (directive)
                     (let ((directive-hints
                            (cl-remove-if-not (lambda (inst)
-                                               (and (eq (e--instruction-type inst) 'directive)
+                                               (and (eq (e--instruction-type inst) :directive)
                                                     (not (eq inst directive))))
                                              (e--wholly-contained-instructions
                                               (overlay-buffer directive)
@@ -1111,14 +1152,14 @@ Returns the prompt as a string."
                          (let ((markdown-delimiter
                                 (e--delimiting-markdown-backticks directive-region-string)))
                            (concat
-                            ", corresponding to"
+                            ", which correspond to:"
                             "\n\n"
                             (format "%s\n%s\n%s"
                                     markdown-delimiter
                                     directive-region-string
                                     markdown-delimiter)
                             "\n\n")))
-                       (format "with the directive being:\n\n%s"
+                       (format "The directive is:\n\n%s"
                                (e--markdown-enquote (overlay-get directive 'e-directive)))
                        (cl-loop for hint in directive-hints
                                 concat (concat
@@ -1131,25 +1172,24 @@ Returns the prompt as a string."
                                                    (overlay-get hint 'e-directive))))))))))
         (with-temp-buffer
           (insert
-           (concat "Listed below" (pcase reference-count
-                                    (0 " is a")
-                                    (1 " is a single reference and a")
-                                    (_ " are references and a"))
-                   (when is-programmer " programming")
-                   " directive."
-                   (when directive-toplevel-reference
-                     (format " Note that the directive is embedded within %s reference."
-                             (if (> reference-count 1) "the" "a")))
+           (concat
+            "Listed below" (pcase reference-count
+                             (0 " is a")
+                             (1 " is a single reference and a")
+                             (_ " are references and a"))
+            (when is-programmer " programming")
+            " directive."
+            (when directive-toplevel-reference
+              (format " Note that the directive is embedded within %s reference."
+                      (if (> reference-count 1) "the" "a")))
            " Follow the directive and return what it asks of you.
 
 What you return must be enclosed within a Markdown block. The content of your Markdown block will \
-be parsed, and the result will then be formatted and injected into the region the directive spans, \
-replacing it."
+be parsed, and the result will then be formatted and injected into the region the directive spans \
+in the buffer, replacing it."
            (when (string-empty-p directive-region-string)
              " In this case, since the directive doesn't span a region, your response will be \
-injected directly instead of it, without replacing anything.")))
-          (insert
-           (concat
+injected directly instead of it, without replacing anything.")
             "\n\n"
             "If you cannot complete your directive or something is unclear to you, be it due to \
 missing information or due to the directive asking something outside your abilities, do not guess \
@@ -1157,10 +1197,10 @@ or proceed. Instead, reply with a question or clarification that does not contai
 blocks. A response without Markdown code blocks is invalidated, and its contents will be displayed \
 to the user as a failure reason. Be very strict, and announce failure even at the slightest \
 discrepancy."
-            "\n\n"
-            (format "## Reference%s%s"
-                    (if (> reference-count 1) "s" "")
-                    (if directive-toplevel-reference " & Directive" ""))))
+            (unless (zerop reference-count)
+              (format "\n\n## Reference%s%s"
+                      (if (> reference-count 1) "s" "")
+                      (if directive-toplevel-reference " & Directive" "")))))
           (cl-loop for (buffer . references) in reference-alist
                    do (progn
                         (insert
@@ -1179,7 +1219,7 @@ discrepancy."
                                 (format "Reference in %s%s"
                                         ref-info-string
                                         (if (eq ref directive-toplevel-reference)
-                                            (format " with embedded directive in %s"
+                                            (format " with embedded directive in %s:"
                                                     directive-region-info-string)
                                           ":"))
                                 "\n\n"
@@ -1189,8 +1229,10 @@ discrepancy."
                                         markdown-delimiter)
                                 (when directive-toplevel-reference
                                   (concat
-                                   (format "\n\nwith directive embedded in %s"
-                                           (expanded-directive-string directive)))))))))))
+                                   (format "\n\nThe directive is embedded in %s"
+                                           (expanded-directive-text directive))
+                                   "\n\n"
+                                   (response-directive-guide-text))))))))))
           (unless directive-toplevel-reference
             (insert
              (concat "\n\n"
@@ -1198,7 +1240,8 @@ discrepancy."
                      "\n\n"
                      (format "For %s, %s"
                              (instruction-path-namestring directive-buffer)
-                             (expanded-directive-string directive)))))
+                             (expanded-directive-text directive)
+                             (response-directive-guide-text)))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
 (provide 'evedel)
