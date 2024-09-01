@@ -1,11 +1,11 @@
-;;; evedel.el --- Instructed LLM programmer -*- lexical-binding: t; -*-
+;;; evedel.el --- Instructed LLM programmer/assistant for Emacs -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024  daedsidog
 
 ;; Author: daedsidog <contact@daedsidog.com>
 ;; Version: 0.0.1
 ;; Keywords: convenience, tools
-;; Package-Requires: ((emacs "27.1") (gptel "0.9.0") (transient "0.4.0"))
+;; Package-Requires: ((emacs "27.1") (gptel "0.9.0"))
 ;; URL: https://github.com/daedsidog/evedel
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -25,10 +25,10 @@
 
 ;;; Commentary:
 
-;; Evedel is a GPTel extension Emacs package specialized for ergonomic programming with an LLM.  It
-;; aims to eliminate manual aspects of software development by relegating them to an LLM.  The
-;; programmer acts as an overseer over their LLM by creating various instruction overlays across
-;; their project.
+;; Evedel is a GPTel extension aimed at managing and processing in-code instructions.  It provides
+;; functionality to define, manipulate, and process directives and references within a buffer.  Key
+;; features include creating, deleting, and updating instructional overlays, as well as processing
+;; responses from LLMs for directives.
 
 ;;; Code:
 
@@ -77,7 +77,9 @@
     (c++-mode        . "a C++ programmer")
     (lisp-mode       . "a Common Lisp programmer")
     (web-mode        . "a web developer"))
-  "Assciation list between major modes and model roles."
+  "Assciation list between major modes and model roles.
+
+Answers the question \"who is the model?\""
   :type 'list
   :group 'evedel)
 
@@ -126,7 +128,7 @@ the internal bookkeeping and cleanup."
         (with-temp-file path
           (prin1 saved-instructions (current-buffer))
           (let ((buffer-count (length (cl-remove-duplicates (mapcar (lambda (inst)
-                                                                      (plist-get :buffer inst))
+                                                                      (plist-get inst :buffer))
                                                                     saved-instructions)))))
             (message "Saved %d Evedel instruction%s from %d buffer%s to %s"
                      (length saved-instructions)
@@ -193,7 +195,7 @@ command will resize the directive in the following manner:
   (interactive)
   (e--create-instruction 'directive))
 
-(defun e-modify-directive-at-point ()
+(defun e-modify-directive ()
   "Modify the directive under the point."
   (interactive)
   (when-let ((directive (e--highest-priority-instruction
@@ -202,16 +204,7 @@ command will resize the directive in the following manner:
       (user-error "Cannot modify a directive that is being processed"))
     (e--directive-prompt directive)))
 
-(defun e--being-processed-p (instruction)
-  "Returns non-nil if the directive INSTRUCTION is being processed."
-  (eq (overlay-get instruction 'e-directive-status) 'processing))
-
-(defun e--directive-empty-p (directive)
-  "Check if DIRECTIVE is empty."
-  (let ((directive-text (overlay-get directive 'e-directive)))
-    (and directive-text (string-empty-p directive-text))))
-
-(defun e-execute-directives ()
+(defun e-process-directives ()
   "Send directives to model via gptel.
 
 If a region is selected, send all directives within the region.
@@ -237,43 +230,60 @@ If a region is not selected and there is a directive under the point, send it."
         (when-let ((toplevel-directives
                     (cl-remove-duplicates
                      (mapcar (lambda (inst)
-                               (e--toplevel-instruction inst 'directive))
+                               (e--topmost-instruction inst 'directive))
                              (e--instructions-in-region (region-beginning)
                                                         (region-end)
                                                         'directive)))))
           (dolist (directive toplevel-directives)
             (execute directive))
           (let ((directive-count (length toplevel-directives)))
-            (message "Sent %d directive%s through gptel"
+            (message "Sent %d directive%s to gptel for processing"
                      directive-count
                      (if (> directive-count 1) "s" ""))))
-      (if-let ((directive (e--toplevel-instruction (e--highest-priority-instruction
+      (if-let ((directive (e--topmost-instruction (e--highest-priority-instruction
                                                     (e--instructions-at (point) 'directive))
                                                    'directive)))
           (progn
             (execute directive)
-            (message "Sent directive request through gptel"))
+            (message "Sent directive to gptel for processing"))
         (when-let ((toplevel-directives (cl-remove-duplicates
                                          (mapcar (lambda (inst)
-                                                   (e--toplevel-instruction inst 'directive))
+                                                   (e--topmost-instruction inst 'directive))
                                                  (e--instructions-in-region (point-min)
                                                                             (point-max)
                                                                             'directive)))))
           (dolist (dir toplevel-directives)
             (execute dir))
-          (message "Sent all directives in current buffer to gptel"))))))
-  
-(defun e-delete-instruction-at-point ()
-  "Delete the instruction instruction at point."
+          (message "Sent all directives in current buffer to gptel for processing"))))))
+
+(defun e-delete-instructions ()
+  "Delete instruction(s) either at point or within the selected region.
+
+Display a message to the user showing how many instructions were deleted.
+Throw a user error if no instructions to delete were found."
   (interactive)
-  (let* ((instructions (seq-filter (lambda (ov) (overlay-get ov 'e-instruction))
-                                   (overlays-at (point))))
-         (target (e--highest-priority-instruction instructions)))
-    (when target
-      (e--delete-instruction target))))
+  (let ((deleted-count 0))
+    (if (use-region-p)
+        (let ((start (region-beginning))
+              (end (region-end)))
+          (dolist (overlay (overlays-in start end))
+            (when (overlay-get overlay 'e-instruction)
+              (e--delete-instruction overlay)
+              (setq deleted-count (1+ deleted-count))))
+          (when (> deleted-count 0)
+            (deactivate-mark))
+          (unless (> deleted-count 0)
+            (user-error "No instructions to delete within the selected region")))
+      (let ((overlay (e--delete-instruction-at (point))))
+        (when overlay
+          (setq deleted-count 1))
+        (unless overlay
+          (user-error "No instruction to delete at point"))))
+    (when (> deleted-count 0)
+      (message "Deleted %d instruction%s" deleted-count (if (> deleted-count 1) "s" "")))))
 
 (defun e-delete-all-instructions ()
-  "Delete all Evedel instructions."
+  "Delete all Evedel instructions across all buffers."
   (interactive)
   (let ((instructions (e--instructions))
         buffers)
@@ -295,17 +305,18 @@ If a region is not selected and there is a directive under the point, send it."
                    (if (= 1 buffer-count) "" "s")))))))
 
 (defun e-convert-instructions ()
-  "Convert instructions between reference and directive within the selected region or at point.
+  "Convert instructions between reference and directive within the selected
+region or at point.
 
-If a region is selected, convert all instructions within the region.
-If no region is selected, convert only the highest priority instruction at point.
+If a region is selected, convert all instructions within the region. If no
+region is selected, convert only the highest priority instruction at point.
 
-Bodyless directives cannot be converted to references. Attempting to do so will throw a user error."
+Bodyless directives cannot be converted to references. Attempting to do so
+will throw a user error."
   (interactive)
   (let* ((instructions (if (use-region-p)
-                           (e--partially-contained-instructions (current-buffer)
-                                                                (region-beginning)
-                                                                (region-end))
+                           (e--instructions-in (region-beginning)
+                                               (region-end))
                          (cl-remove-if #'null
                                        (list (e--highest-priority-instruction
                                               (e--instructions-at (point)))))))
@@ -350,7 +361,27 @@ Bodyless directives cannot be converted to references. Attempting to do so will 
                           (concat ": " (mapconcat 'identity conversion-msgs " and "))
                         ""))
                  num-instructions
-                 (if (> num-instructions 1) "s" ""))))))
+                 (if (> num-instructions 1) "s" ""))
+        (when (region-active-p)
+          (deactivate-mark))))))
+
+(defun e--delete-instruction-at (point)
+  "Delete the instruction at POINT.
+
+Returns the deleted instruction overlay."
+  (let* ((instructions (e--instructions-at point))
+         (target (e--highest-priority-instruction instructions)))
+    (when target
+      (e--delete-instruction target))))
+
+(defun e--being-processed-p (instruction)
+  "Returns non-nil if the directive INSTRUCTION is being processed."
+  (eq (overlay-get instruction 'e-directive-status) 'processing))
+
+(defun e--directive-empty-p (directive)
+  "Check if DIRECTIVE is empty."
+  (let ((directive-text (overlay-get directive 'e-directive)))
+    (and directive-text (string-empty-p directive-text))))
 
 (defun e--create-instruction (type)
   "Create or scale an instruction of the given TYPE within the selected region.
@@ -568,7 +599,9 @@ non-nil prevents the opening of a prompt buffer."
     ov))
 
 (defun e--delete-instruction (instruction)
-  "Delete the INSTRUCTION overlay."
+  "Delete the INSTRUCTION overlay.
+
+Returns the deleted instruction overlay."
   (let ((children (e--child-instructions instruction)))
     (delq instruction (alist-get (overlay-buffer instruction) e--instructions))
     (delete-overlay instruction)
@@ -580,7 +613,8 @@ non-nil prevents the opening of a prompt buffer."
             (overlay-put child 'e-label-color (overlay-get instruction 'e-label-color)))
         (overlay-put child 'e-bg-color 'default)
         (overlay-put child 'e-label-color 'default))
-      (e--update-instruction-overlay child t))))
+      (e--update-instruction-overlay child t)))
+  instruction)
 
 (defun e--pos-bol-p (pos buffer)
   "Return nil if POS is not a beginning of a line in BUFFER."
@@ -789,7 +823,7 @@ Also returns bodyless overlays located right before the point."
                     (overlays-in point
                                  (min (point-max) (1+ point)))))
 
-(defun e--instructions-in-region (start end &optional type)
+(defun e--instructions-in (start end &optional type)
   "Return a list of instructions in region delimited by START and END.
 
 Optionally return only instructions of specific TYPE."
@@ -818,26 +852,23 @@ Does not return instructions that contain the region in its entirety the region.
   "Return a list of all Evedel instructions."
   (e--foreach-instruction inst collect inst))
 
-(cl-defun e--toplevel-instruction (instruction &optional type)
-  "Return the top-level instruction containing the INSTRUCTION, if any.
+(cl-defun e--topmost-instruction (instruction &optional of-type)
+  "Return the topmost instruction containing the INSTRUCTION, if any.
 
-If TYPE is non-nil, filter by specified instruction type.
+If OF-TYPE is non-nil, filter by the specified instruction OF-TYPE.
+If OF-TYPE is nil, the instruction returned is the top-level one."
   (unless instruction
-    (cl-return-from e--toplevel-instruction nil))
+    (cl-return-from e--topmost-instruction nil))
   (with-current-buffer (overlay-buffer instruction)
-    (let ((toplevel-instruction
-           (cl-reduce (lambda (acc inst)
-                        (if (< (overlay-get acc 'priority)
-                               (overlay-get inst 'priority))
-                            acc
-                          inst))
-                      (e--instructions-at (overlay-start instruction))
-                      :initial-value instruction)))
-      (if (null type)
-          toplevel-instruction
-        (if (eq (overlay-get toplevel-instruction 'e-instruction-type) type)
-            toplevel-instruction
-          nil)))))
+    (let ((best-instruction instruction))
+      (cl-labels ((parent-instr (instr)
+                    (if-let ((parent (e--parent-instruction instr)))
+                        (progn
+                          (when (and of-type (eq of-type (e--instruction-type parent)))
+                            (setq best-instruction parent))
+                          (parent-instr parent))
+                      best-instruction)))
+        (parent-instr best-instruction)))))
 
 (defun e--recreate-instructions ()
   "Recreate all instructions.  Used for debugging purposes."
@@ -1028,7 +1059,7 @@ buffer, and the second being the content of the span itself."
 Returns the prompt as a string."
   (let* ((is-programmer (derived-mode-p 'prog-mode))
          (toplevel-references (e--foreach-instruction
-                                  inst when (eq (e--toplevel-instruction inst 'reference) inst)
+                                  inst when (eq (e--topmost-instruction inst 'reference) inst)
                                   collect inst))
          ;; The references in the reference alist should be sorted by their order of appearance
          ;; in the buffer.
@@ -1042,7 +1073,7 @@ Returns the prompt as a string."
                                                                     (overlay-start y)))))
                                              (cl-return alist))))
          (reference-count (length toplevel-references))
-         (directive-toplevel-reference (e--toplevel-instruction directive 'reference))
+         (directive-toplevel-reference (e--topmost-instruction directive 'reference))
          (directive-buffer (overlay-buffer directive))
          ;; Should the directive buffer have a valid file path, we should use a relative path for
          ;; the other references, assuming that they too have a valid file path.
