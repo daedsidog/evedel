@@ -232,9 +232,9 @@ If a region is not selected and there is a directive under the point, send it."
                     (cl-remove-duplicates
                      (mapcar (lambda (inst)
                                (e--topmost-instruction inst :directive))
-                             (e--instructions-in-region (region-beginning)
-                                                        (region-end)
-                                                        :directive)))))
+                             (e--instructions-in (region-beginning)
+                                                 (region-end)
+                                                 :directive)))))
           (dolist (directive toplevel-directives)
             (execute directive))
           (let ((directive-count (length toplevel-directives)))
@@ -250,7 +250,7 @@ If a region is not selected and there is a directive under the point, send it."
         (when-let ((toplevel-directives (cl-remove-duplicates
                                          (mapcar (lambda (inst)
                                                    (e--topmost-instruction inst :directive))
-                                                 (e--instructions-in-region (point-min)
+                                                 (e--instructions-in (point-min)
                                                                             (point-max)
                                                                             :directive)))))
           (dolist (dir toplevel-directives)
@@ -335,12 +335,12 @@ will throw a user error."
            ((e--directivep instr)
             (unless (e--bodyless-instruction-p instr)
               (e--delete-instruction instr)
-              (let ((overlay (e--create-reference-in-region buffer start end)))
+              (let ((overlay (e--create-reference-in buffer start end)))
                 (overlay-put overlay 'e-directive directive-text))
               (setq converted-directives-to-references (1+ converted-directives-to-references))))
            ((e--referencep instr)
             (e--delete-instruction instr)
-            (e--create-directive-in-region buffer start end nil (or directive-text ""))
+            (e--create-directive-in buffer start end nil (or directive-text ""))
             (setq converted-references-to-directives (1+ converted-references-to-directives)))
            (t
             (user-error "Unknown instruction type")))))
@@ -417,16 +417,16 @@ function will resize it. See either `evedel-create-reference' or
             (user-error "Cannot add intersecting instructions of different types"))
           (let* ((buffer (current-buffer))
                  (instruction (if (eq type :reference)
-                                  (e--create-reference-in-region buffer
+                                  (e--create-reference-in buffer
                                                                  (region-beginning)
                                                                  (region-end))
-                                (e--create-directive-in-region buffer
+                                (e--create-directive-in buffer
                                                                (region-beginning)
                                                                (region-end)))))
             (with-current-buffer buffer (deactivate-mark))
             instruction)))
     (when (eq type :directive)
-      (prog1 (e--create-directive-in-region (current-buffer) (point) (point) t)
+      (prog1 (e--create-directive-in (current-buffer) (point) (point) t)
         (deactivate-mark)))))
 
 (cl-defun e--process-directive-llm-response (response info)
@@ -511,7 +511,7 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
       type
     (error "%s is not an instruction overlay" instruction)))
 
-(defun e--create-instruction-overlay-in-region (buffer start end)
+(defun e--create-instruction-overlay-in (buffer start end)
   "Create an overlay in BUFFER from START to END of the lines."
   (make-local-variable 'e--after-change-functions-hooked)
   (with-current-buffer buffer
@@ -524,7 +524,7 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
                   (lambda (beg end _len)
                     (let ((beg (max (point-min) (1- beg)))
                           (end (min (point-max) (1+ end))))
-                      (let ((affected-instructions (e--instructions-in-region beg end)))
+                      (let ((affected-instructions (e--instructions-in beg end)))
                         (dolist (instruction affected-instructions)
                           (e--update-instruction-overlay instruction)))))
                   nil t))
@@ -573,15 +573,15 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
                                         (e--child-instructions child))))
     children))
 
-(defun e--create-reference-in-region (buffer start end)
+(defun e--create-reference-in (buffer start end)
   "Create a region reference from START to END in BUFFER."
-  (let ((ov (e--create-instruction-overlay-in-region buffer start end)))
+  (let ((ov (e--create-instruction-overlay-in buffer start end)))
     (overlay-put ov 'e-instruction-type :reference)
     (overlay-put ov 'evaporate t)
     (e--update-instruction-overlay ov t)
     ov))
 
-(defun e--create-directive-in-region (buffer start end &optional bodyless directive-text)
+(defun e--create-directive-in (buffer start end &optional bodyless directive-text)
   "Create a region directive from START to END in BUFFER.
 
 This function switches to another buffer midway of execution.
@@ -589,7 +589,7 @@ BODYLESS controls special formatting if non-nil.
 
 DIRECTIVE-TEXT is used as the default directive.  Having DIRECTIVE-TEXT be
 non-nil prevents the opening of a prompt buffer."
-  (let ((ov (e--create-instruction-overlay-in-region buffer start end)))
+  (let ((ov (e--create-instruction-overlay-in buffer start end)))
     (unless bodyless
       (overlay-put ov 'evaporate t))
     (overlay-put ov 'e-instruction-type :directive)
@@ -896,10 +896,10 @@ If OF-TYPE is nil, the instruction returned is the top-level one."
       (cl-destructuring-bind (&key start end buffer type) instruction
         (pcase type
           (:reference
-           (e--create-reference-in-region buffer start end)
+           (e--create-reference-in buffer start end)
            (cl-incf recreated))
           (:directive
-           (e--create-directive-in-region buffer start end)
+           (e--create-directive-in buffer start end)
            (cl-incf recreated)))))
     (when (called-interactively-p 'interactive)
       (message "Recreated %d out of %d Evedel instructions"
