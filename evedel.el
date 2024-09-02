@@ -1,3 +1,4 @@
+
 ;;; evedel.el --- Instructed LLM programmer/assistant for Emacs -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024  daedsidog
@@ -375,7 +376,7 @@ Returns the deleted instruction overlay."
       (e--delete-instruction target))))
 
 (defun e--being-processed-p (instruction)
-  "Returns non-nil if the directive INSTRUCTION is being processed."
+  "Return non-nil if the directive INSTRUCTION is being processed."
   (eq (overlay-get instruction 'e-directive-status) :processing))
 
 (defun e--directive-empty-p (directive)
@@ -868,7 +869,10 @@ If OF-TYPE is nil, the instruction returned is the top-level one."
   (unless instruction
     (cl-return-from e--topmost-instruction nil))
   (with-current-buffer (overlay-buffer instruction)
-    (let ((best-instruction instruction))
+    (let ((best-instruction (if of-type
+                                (when (eq (e--instruction-type instruction) of-type)
+                                  instruction)
+                              instruction)))
       (cl-labels ((parent-instr (instr)
                     (if-let ((parent (e--parent-instruction instr)))
                         (progn
@@ -876,7 +880,7 @@ If OF-TYPE is nil, the instruction returned is the top-level one."
                             (setq best-instruction parent))
                           (parent-instr parent))
                       best-instruction)))
-        (parent-instr best-instruction)))))
+        (parent-instr instruction)))))
 
 (defun e--recreate-instructions ()
   "Recreate all instructions.  Used for debugging purposes."
@@ -1006,6 +1010,27 @@ Returns the message as a string."
       (setq backticks (concat backticks "`")))
     backticks))
 
+(defun e--preview-directive-llm-prompt-at-point ()
+  "Preview directive prompt at the current point.  Useful for debugging."
+  (interactive)
+  (let ((directive (e--topmost-instruction (car (e--instructions-at (point) :directive))
+                                           :directive)))
+    (let ((request-string (e--directive-llm-prompt directive)))
+      (let ((bufname "*evedel-directive-preview*"))
+        (with-output-to-temp-buffer bufname
+          (princ (format "<!-- SYSTEM: %s -->"
+                         (replace-regexp-in-string "\n"
+                                                   "\n# "
+                                                   (e--directive-llm-system-message directive))))
+          (princ "\n\n")
+          (princ request-string)
+          (with-current-buffer bufname
+            (markdown-mode)
+            (read-only-mode 1)
+            (visual-line-mode 1)
+            (display-line-numbers-mode 1)
+            (local-set-key (kbd "q") 'quit-window)))))))
+    
 (defun e--overlay-region-info (overlay)
   "Return region span information of OVERLAY in its buffer.
 
@@ -1067,7 +1092,8 @@ buffer, and the second being the content of the span itself."
 Returns the prompt as a string."
   (let* ((is-programmer (derived-mode-p 'prog-mode))
          (toplevel-references (e--foreach-instruction
-                                  inst when (eq (e--topmost-instruction inst :reference) inst)
+                                  inst when (and (e--referencep inst)
+                                                 (eq (e--topmost-instruction inst :reference) inst))
                                   collect inst))
          ;; The references in the reference alist should be sorted by their order of appearance
          ;; in the buffer.
@@ -1090,7 +1116,14 @@ Returns the prompt as a string."
         (e--overlay-region-info directive)
       ;; This marking function is used to mark the prompt text so that it may later be formatted by
       ;; sections, should the need to do so will arise.
-      (cl-labels ((capitalize-first-letter (s)
+      (cl-labels ((response-directive-guide-text ()
+                    (if (e--bodyless-instruction-p directive)
+                      "Note that your response will be injected in the position the directive is \
+embedded in, so be mindful not to return anything superfluous that surrounds the embedded \
+directive."
+                      "Note that your response will replace the region spanned by the embedded \
+directive, so be mindful not to return anything superflous that surrounds it."))
+                  (capitalize-first-letter (s)
                     (if (> (length s) 0)
                         (concat (upcase (substring s 0 1)) (downcase (substring s 1)))
                       nil))
@@ -1103,7 +1136,7 @@ Returns the prompt as a string."
                                      (file-name-parent-directory directive-filename)))
                           (format "buffer `%s`" (buffer-name buffer)))
                       (format "buffer `%s`" (buffer-name buffer))))
-                  (expanded-directive-string (directive)
+                  (expanded-directive-text (directive)
                     (let ((directive-hints
                            (cl-remove-if-not (lambda (inst)
                                                (and (eq (e--instruction-type inst) :directive)
@@ -1119,14 +1152,14 @@ Returns the prompt as a string."
                          (let ((markdown-delimiter
                                 (e--delimiting-markdown-backticks directive-region-string)))
                            (concat
-                            ", corresponding to"
+                            ", which correspond to:"
                             "\n\n"
                             (format "%s\n%s\n%s"
                                     markdown-delimiter
                                     directive-region-string
                                     markdown-delimiter)
                             "\n\n")))
-                       (format "with the directive being:\n\n%s"
+                       (format "The directive is:\n\n%s"
                                (e--markdown-enquote (overlay-get directive 'e-directive)))
                        (cl-loop for hint in directive-hints
                                 concat (concat
@@ -1139,25 +1172,24 @@ Returns the prompt as a string."
                                                    (overlay-get hint 'e-directive))))))))))
         (with-temp-buffer
           (insert
-           (concat "Listed below" (pcase reference-count
-                                    (0 " is a")
-                                    (1 " is a single reference and a")
-                                    (_ " are references and a"))
-                   (when is-programmer " programming")
-                   " directive."
-                   (when directive-toplevel-reference
-                     (format " Note that the directive is embedded within %s reference."
-                             (if (> reference-count 1) "the" "a")))
+           (concat
+            "Listed below" (pcase reference-count
+                             (0 " is a")
+                             (1 " is a single reference and a")
+                             (_ " are references and a"))
+            (when is-programmer " programming")
+            " directive."
+            (when directive-toplevel-reference
+              (format " Note that the directive is embedded within %s reference."
+                      (if (> reference-count 1) "the" "a")))
            " Follow the directive and return what it asks of you.
 
 What you return must be enclosed within a Markdown block. The content of your Markdown block will \
-be parsed, and the result will then be formatted and injected into the region the directive spans, \
-replacing it."
+be parsed, and the result will then be formatted and injected into the region the directive spans \
+in the buffer, replacing it."
            (when (string-empty-p directive-region-string)
              " In this case, since the directive doesn't span a region, your response will be \
-injected directly instead of it, without replacing anything.")))
-          (insert
-           (concat
+injected directly instead of it, without replacing anything.")
             "\n\n"
             "If you cannot complete your directive or something is unclear to you, be it due to \
 missing information or due to the directive asking something outside your abilities, do not guess \
@@ -1165,10 +1197,10 @@ or proceed. Instead, reply with a question or clarification that does not contai
 blocks. A response without Markdown code blocks is invalidated, and its contents will be displayed \
 to the user as a failure reason. Be very strict, and announce failure even at the slightest \
 discrepancy."
-            "\n\n"
-            (format "## Reference%s%s"
-                    (if (> reference-count 1) "s" "")
-                    (if directive-toplevel-reference " & Directive" ""))))
+            (unless (zerop reference-count)
+              (format "\n\n## Reference%s%s"
+                      (if (> reference-count 1) "s" "")
+                      (if directive-toplevel-reference " & Directive" "")))))
           (cl-loop for (buffer . references) in reference-alist
                    do (progn
                         (insert
@@ -1187,7 +1219,7 @@ discrepancy."
                                 (format "Reference in %s%s"
                                         ref-info-string
                                         (if (eq ref directive-toplevel-reference)
-                                            (format " with embedded directive in %s"
+                                            (format " with embedded directive in %s:"
                                                     directive-region-info-string)
                                           ":"))
                                 "\n\n"
@@ -1197,8 +1229,10 @@ discrepancy."
                                         markdown-delimiter)
                                 (when directive-toplevel-reference
                                   (concat
-                                   (format "\n\nwith directive embedded in %s"
-                                           (expanded-directive-string directive)))))))))))
+                                   (format "\n\nThe directive is embedded in %s"
+                                           (expanded-directive-text directive))
+                                   "\n\n"
+                                   (response-directive-guide-text))))))))))
           (unless directive-toplevel-reference
             (insert
              (concat "\n\n"
@@ -1206,7 +1240,8 @@ discrepancy."
                      "\n\n"
                      (format "For %s, %s"
                              (instruction-path-namestring directive-buffer)
-                             (expanded-directive-string directive)))))
+                             (expanded-directive-text directive)
+                             (response-directive-guide-text)))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
 (provide 'evedel)
