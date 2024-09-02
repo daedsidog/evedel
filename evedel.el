@@ -1,4 +1,3 @@
-
 ;;; evedel.el --- Instructed LLM programmer/assistant for Emacs -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024  daedsidog
@@ -232,9 +231,9 @@ If a region is not selected and there is a directive under the point, send it."
                     (cl-remove-duplicates
                      (mapcar (lambda (inst)
                                (e--topmost-instruction inst :directive))
-                             (e--instructions-in-region (region-beginning)
-                                                        (region-end)
-                                                        :directive)))))
+                             (e--instructions-in (region-beginning)
+                                                 (region-end)
+                                                 :directive)))))
           (dolist (directive toplevel-directives)
             (execute directive))
           (let ((directive-count (length toplevel-directives)))
@@ -250,7 +249,7 @@ If a region is not selected and there is a directive under the point, send it."
         (when-let ((toplevel-directives (cl-remove-duplicates
                                          (mapcar (lambda (inst)
                                                    (e--topmost-instruction inst :directive))
-                                                 (e--instructions-in-region (point-min)
+                                                 (e--instructions-in (point-min)
                                                                             (point-max)
                                                                             :directive)))))
           (dolist (dir toplevel-directives)
@@ -335,12 +334,12 @@ will throw a user error."
            ((e--directivep instr)
             (unless (e--bodyless-instruction-p instr)
               (e--delete-instruction instr)
-              (let ((overlay (e--create-reference-in-region buffer start end)))
+              (let ((overlay (e--create-reference-in buffer start end)))
                 (overlay-put overlay 'e-directive directive-text))
               (setq converted-directives-to-references (1+ converted-directives-to-references))))
            ((e--referencep instr)
             (e--delete-instruction instr)
-            (e--create-directive-in-region buffer start end nil (or directive-text ""))
+            (e--create-directive-in buffer start end nil (or directive-text ""))
             (setq converted-references-to-directives (1+ converted-references-to-directives)))
            (t
             (user-error "Unknown instruction type")))))
@@ -417,16 +416,16 @@ function will resize it. See either `evedel-create-reference' or
             (user-error "Cannot add intersecting instructions of different types"))
           (let* ((buffer (current-buffer))
                  (instruction (if (eq type :reference)
-                                  (e--create-reference-in-region buffer
+                                  (e--create-reference-in buffer
                                                                  (region-beginning)
                                                                  (region-end))
-                                (e--create-directive-in-region buffer
+                                (e--create-directive-in buffer
                                                                (region-beginning)
                                                                (region-end)))))
             (with-current-buffer buffer (deactivate-mark))
             instruction)))
     (when (eq type :directive)
-      (prog1 (e--create-directive-in-region (current-buffer) (point) (point) t)
+      (prog1 (e--create-directive-in (current-buffer) (point) (point) t)
         (deactivate-mark)))))
 
 (cl-defun e--process-directive-llm-response (response info)
@@ -468,7 +467,8 @@ the current buffer."
                     (goto-char (1+ beg))
                     (backward-delete-char 1)
                     (unless (eq indent-line-function #'indent-relative)
-                      (indent-region beg end))))))))))
+                      (indent-region beg end)))
+                  (overlay-put directive 'evaporate t))))))))
     (e--update-instruction-overlay directive t)))
 
 (defun e--referencep (instruction)
@@ -511,7 +511,7 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
       type
     (error "%s is not an instruction overlay" instruction)))
 
-(defun e--create-instruction-overlay-in-region (buffer start end)
+(defun e--create-instruction-overlay-in (buffer start end)
   "Create an overlay in BUFFER from START to END of the lines."
   (make-local-variable 'e--after-change-functions-hooked)
   (with-current-buffer buffer
@@ -524,7 +524,7 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
                   (lambda (beg end _len)
                     (let ((beg (max (point-min) (1- beg)))
                           (end (min (point-max) (1+ end))))
-                      (let ((affected-instructions (e--instructions-in-region beg end)))
+                      (let ((affected-instructions (e--instructions-in beg end)))
                         (dolist (instruction affected-instructions)
                           (e--update-instruction-overlay instruction)))))
                   nil t))
@@ -573,15 +573,15 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
                                         (e--child-instructions child))))
     children))
 
-(defun e--create-reference-in-region (buffer start end)
+(defun e--create-reference-in (buffer start end)
   "Create a region reference from START to END in BUFFER."
-  (let ((ov (e--create-instruction-overlay-in-region buffer start end)))
+  (let ((ov (e--create-instruction-overlay-in buffer start end)))
     (overlay-put ov 'e-instruction-type :reference)
     (overlay-put ov 'evaporate t)
     (e--update-instruction-overlay ov t)
     ov))
 
-(defun e--create-directive-in-region (buffer start end &optional bodyless directive-text)
+(defun e--create-directive-in (buffer start end &optional bodyless directive-text)
   "Create a region directive from START to END in BUFFER.
 
 This function switches to another buffer midway of execution.
@@ -589,7 +589,7 @@ BODYLESS controls special formatting if non-nil.
 
 DIRECTIVE-TEXT is used as the default directive.  Having DIRECTIVE-TEXT be
 non-nil prevents the opening of a prompt buffer."
-  (let ((ov (e--create-instruction-overlay-in-region buffer start end)))
+  (let ((ov (e--create-instruction-overlay-in buffer start end)))
     (unless bodyless
       (overlay-put ov 'evaporate t))
     (overlay-put ov 'e-instruction-type :directive)
@@ -896,10 +896,10 @@ If OF-TYPE is nil, the instruction returned is the top-level one."
       (cl-destructuring-bind (&key start end buffer type) instruction
         (pcase type
           (:reference
-           (e--create-reference-in-region buffer start end)
+           (e--create-reference-in buffer start end)
            (cl-incf recreated))
           (:directive
-           (e--create-directive-in-region buffer start end)
+           (e--create-directive-in buffer start end)
            (cl-incf recreated)))))
     (when (called-interactively-p 'interactive)
       (message "Recreated %d out of %d Evedel instructions"
@@ -1036,50 +1036,59 @@ Returns the message as a string."
 
 Returns two values, first being the region line & column span string in the
 buffer, and the second being the content of the span itself."
-  (let ((start (overlay-start overlay))
-        (end (overlay-end overlay))
-        start-line
-        end-line
-        start-column
-        end-column
-        start-prop
-        end-prop)
-    (with-current-buffer (overlay-buffer overlay)
-      (without-restriction
-        (save-excursion
-          (goto-char start)
-          (setq start-column (current-column))
-          (if (bolp)
-              (setq start-prop :bol)
-            (if (eolp)
-                (setq start-prop :eol)))
-          (goto-char end)
-          (setq end-column (current-column))
-          (if (bolp)
-              (setq end-prop :bol)
-            (if (eolp)
-                (setq end-prop :eol))))
-        (when (and (eq start-prop :eol) (not (eq start-prop :bol)))
-          (cl-incf start)
-          (setq start-prop :bol))
-        (when (and (eq end-prop :bol) (not (eq end-prop :eol)))
-          (cl-decf end)
-          (setq end-prop :eol))
-        (if (zerop end)
-            ;; If END is zero, it means that the buffer is entirely empty.
-            (cl-values "start of buffer" "")
-          (setq start-line (line-number-at-pos start t)
-                end-line (line-number-at-pos end t))
-          (cl-values (format "lines %d%s-%d%s"
-                             start-line
-                             (if (eq start-prop :bol)
-                                 ""
-                               (format ":%d" start-column))
-                             end-line
-                             (if (eq end-prop :eol)
-                                 ""
-                               (format ":%d" end-column)))
-                     (buffer-substring-no-properties start end)))))))
+  (let ((beg (overlay-start overlay))
+        (end (overlay-end overlay)))
+    (cl-labels ((pos-bol-p (pos)
+                  (save-excursion
+                    (goto-char pos)
+                    (bolp)))
+                (pos-eol-p (pos)
+                  (save-excursion
+                    (goto-char pos)
+                    (eolp)))
+                (pos-lineno (pos)
+                  (line-number-at-pos pos))
+                (pos-colno (pos)
+                  (save-excursion
+                    (goto-char pos)
+                    (current-column))))
+      (with-current-buffer (overlay-buffer overlay)
+        (without-restriction
+          (unless (= beg end)
+            (when (pos-eol-p beg)
+              (cl-incf beg))
+            (when (pos-bol-p end)
+              (cl-decf end)))
+          (if (= beg end (point-min))
+              (cl-values "beginning of the buffer" "")
+            (let ((beg-lineno (pos-lineno beg))
+                  (end-lineno (pos-lineno end))
+                  (beg-colno (pos-colno beg))
+                  (end-colno (pos-colno end)))
+              (cl-values (format "line%s %s"
+                                 (if (/= beg-lineno end-lineno) "s" "")
+                                 (if (/= beg-lineno end-lineno)
+                                     (format "%d%s-%d%s"
+                                             beg-lineno
+                                             (if (pos-bol-p beg)
+                                                 ""
+                                               (format ":%d" beg-colno))
+                                             end-lineno
+                                             (if (pos-eol-p end)
+                                                 ""
+                                               (format ":%d" end-colno)))
+                                   (format "%s%s"
+                                           beg-lineno
+                                           (if (and (pos-bol-p beg) (pos-eol-p end))
+                                               ""
+                                             (if (= beg-colno end-colno)
+                                                 (format ", column %d" beg-colno)
+                                               (format ", columns %d-%s"
+                                                       beg-colno
+                                                       (if (pos-eol-p end)
+                                                           "eol"
+                                                         (format "%d" end-colno))))))))
+                         (buffer-substring-no-properties beg end)))))))))
 
 (defun e--markdown-enquote (input-string)
   "Add Markdown blockquote to each line in INPUT-STRING."
@@ -1148,7 +1157,7 @@ directive, so be mindful not to return anything superflous that surrounds it."))
                       (concat
                        (format "%s" directive-region-info-string)
                        (if (string-empty-p directive-region-string)
-                           ":"
+                           "."
                          (let ((markdown-delimiter
                                 (e--delimiting-markdown-backticks directive-region-string)))
                            (concat
@@ -1157,8 +1166,8 @@ directive, so be mindful not to return anything superflous that surrounds it."))
                             (format "%s\n%s\n%s"
                                     markdown-delimiter
                                     directive-region-string
-                                    markdown-delimiter)
-                            "\n\n")))
+                                    markdown-delimiter))))
+                       "\n\n"
                        (format "The directive is:\n\n%s"
                                (e--markdown-enquote (overlay-get directive 'e-directive)))
                        (cl-loop for hint in directive-hints
