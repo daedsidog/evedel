@@ -1,4 +1,3 @@
-
 ;;; evedel.el --- Instructed LLM programmer/assistant for Emacs -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024  daedsidog
@@ -448,6 +447,7 @@ the current buffer."
             (mark-failed response)
           (let ((parsed-response (match-string 1 response)))
             (overlay-put directive 'e-directive-status :succeeded)
+            (overlay-put 'evaporate t)
             (with-current-buffer (overlay-buffer directive)
               (let ((beg (overlay-start directive))
                     (end (overlay-end directive)))
