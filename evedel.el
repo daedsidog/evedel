@@ -1036,50 +1036,59 @@ Returns the message as a string."
 
 Returns two values, first being the region line & column span string in the
 buffer, and the second being the content of the span itself."
-  (let ((start (overlay-start overlay))
-        (end (overlay-end overlay))
-        start-line
-        end-line
-        start-column
-        end-column
-        start-prop
-        end-prop)
-    (with-current-buffer (overlay-buffer overlay)
-      (without-restriction
-        (save-excursion
-          (goto-char start)
-          (setq start-column (current-column))
-          (if (bolp)
-              (setq start-prop :bol)
-            (if (eolp)
-                (setq start-prop :eol)))
-          (goto-char end)
-          (setq end-column (current-column))
-          (if (bolp)
-              (setq end-prop :bol)
-            (if (eolp)
-                (setq end-prop :eol))))
-        (when (and (eq start-prop :eol) (not (eq start-prop :bol)))
-          (cl-incf start)
-          (setq start-prop :bol))
-        (when (and (eq end-prop :bol) (not (eq end-prop :eol)))
-          (cl-decf end)
-          (setq end-prop :eol))
-        (if (zerop end)
-            ;; If END is zero, it means that the buffer is entirely empty.
-            (cl-values "start of buffer" "")
-          (setq start-line (line-number-at-pos start t)
-                end-line (line-number-at-pos end t))
-          (cl-values (format "lines %d%s-%d%s"
-                             start-line
-                             (if (eq start-prop :bol)
-                                 ""
-                               (format ":%d" start-column))
-                             end-line
-                             (if (eq end-prop :eol)
-                                 ""
-                               (format ":%d" end-column)))
-                     (buffer-substring-no-properties start end)))))))
+  (let ((beg (overlay-start overlay))
+        (end (overlay-end overlay)))
+    (cl-labels ((pos-bol-p (pos)
+                  (save-excursion
+                    (goto-char pos)
+                    (bolp)))
+                (pos-eol-p (pos)
+                  (save-excursion
+                    (goto-char pos)
+                    (eolp)))
+                (pos-lineno (pos)
+                  (line-number-at-pos pos))
+                (pos-colno (pos)
+                  (save-excursion
+                    (goto-char pos)
+                    (current-column))))
+      (with-current-buffer (overlay-buffer overlay)
+        (without-restriction
+          (unless (= beg end)
+            (when (pos-eol-p beg)
+              (cl-incf beg))
+            (when (pos-bol-p end)
+              (cl-decf end)))
+          (if (= beg end (point-min))
+              (cl-values "beginning of the buffer" "")
+            (let ((beg-lineno (pos-lineno beg))
+                  (end-lineno (pos-lineno end))
+                  (beg-colno (pos-colno beg))
+                  (end-colno (pos-colno end)))
+              (cl-values (format "line%s %s"
+                                 (if (/= beg-lineno end-lineno) "s" "")
+                                 (if (/= beg-lineno end-lineno)
+                                     (format "%d%s-%d%s"
+                                             beg-lineno
+                                             (if (pos-bol-p beg)
+                                                 ""
+                                               (format ":%d" beg-colno))
+                                             end-lineno
+                                             (if (pos-eol-p end)
+                                                 ""
+                                               (format ":%d" end-colno)))
+                                   (format "%s%s"
+                                           beg-lineno
+                                           (if (and (pos-bol-p beg) (pos-eol-p end))
+                                               ""
+                                             (if (= beg-colno end-colno)
+                                                 (format ", column %d" beg-colno)
+                                               (format ", columns %d-%s"
+                                                       beg-colno
+                                                       (if (pos-eol-p end)
+                                                           "eol"
+                                                         (format "%d" end-colno))))))))
+                         (buffer-substring-no-properties beg end)))))))))
 
 (defun e--markdown-enquote (input-string)
   "Add Markdown blockquote to each line in INPUT-STRING."
@@ -1148,7 +1157,7 @@ directive, so be mindful not to return anything superflous that surrounds it."))
                       (concat
                        (format "%s" directive-region-info-string)
                        (if (string-empty-p directive-region-string)
-                           ":"
+                           "."
                          (let ((markdown-delimiter
                                 (e--delimiting-markdown-backticks directive-region-string)))
                            (concat
@@ -1157,8 +1166,8 @@ directive, so be mindful not to return anything superflous that surrounds it."))
                             (format "%s\n%s\n%s"
                                     markdown-delimiter
                                     directive-region-string
-                                    markdown-delimiter)
-                            "\n\n")))
+                                    markdown-delimiter))))
+                       "\n\n"
                        (format "The directive is:\n\n%s"
                                (e--markdown-enquote (overlay-get directive 'e-directive)))
                        (cl-loop for hint in directive-hints
