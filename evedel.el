@@ -5,7 +5,7 @@
 ;; Author: daedsidog <contact@daedsidog.com>
 ;; Version: 0.0.1
 ;; Keywords: convenience, tools
-;; Package-Requires: ((emacs "27.1") (gptel "0.9.0"))
+;; Package-Requires: ((emacs "28.1") (gptel "0.9.0"))
 ;; URL: https://github.com/daedsidog/evedel
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -447,7 +447,6 @@ the current buffer."
             (mark-failed response)
           (let ((parsed-response (match-string 1 response)))
             (overlay-put directive 'e-directive-status :succeeded)
-            (overlay-put 'evaporate t)
             (with-current-buffer (overlay-buffer directive)
               (let ((beg (overlay-start directive))
                     (end (overlay-end directive)))
@@ -468,7 +467,8 @@ the current buffer."
                     (goto-char (1+ beg))
                     (backward-delete-char 1)
                     (unless (eq indent-line-function #'indent-relative)
-                      (indent-region beg end))))))))))
+                      (indent-region beg end)))
+                  (overlay-put directive 'evaporate t))))))))
     (e--update-instruction-overlay directive t)))
 
 (defun e--referencep (instruction)
