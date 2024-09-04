@@ -1057,7 +1057,10 @@ Returns the message as a string."
             (read-only-mode 1)
             (visual-line-mode 1)
             (display-line-numbers-mode 1)
-            (local-set-key (kbd "q") 'quit-window)))))))
+            (let ((local-map (make-sparse-keymap)))
+              (set-keymap-parent local-map (current-local-map))
+              (define-key local-map (kbd "q") 'quit-window)
+              (use-local-map local-map))))))))
     
 (defun e--overlay-region-info (overlay)
   "Return region span information of OVERLAY in its buffer.
