@@ -15,11 +15,21 @@ Evedel is versatile enough so that it can be utilized in various types of buffer
 - Uses overlays for tracking instructions instead of raw text, which means that the instructions are not part of your file or buffer. The overlays are mostly intuitive and can be customized.
 - Has the ability to save your instruction overlays so you won't have to restart the instruction labeling process every time you start a new Emacs session.
 
+** Requirements
+:PROPERTIES:
+:CUSTOM_ID: requirements
+:END:
+
+- [[https://github.com/karthink/gptel][GPTel]]
+- Emacs version 28.1 or higher
+
 ** Usage
 
 Evedel's function revolves around the creation and manipulation of references and directives within your Emacs buffers. Directives are prompts you send to the model, while references provide context to help complete these directives more accurately.
 
 [[file:media/basic-demo.gif]]
+
+*** Commands
 
 |---------------------------+-----------------------------------------------------------------------|
 | *Creation & Modification* | Command Description                                                   |
@@ -38,9 +48,10 @@ Evedel's function revolves around the creation and manipulation of references an
 | =evedel-delete-instructions=  | Remove instructions either at point or within the selected region.         |
 | =evedel-delete-all=           | Delete all Evedel instructions across all buffers.                         |
 | =evedel-convert-instructions= | Convert between reference and directive types at point or within a region. |
+| =evedel-instruction-count=    | Return the number of instructions currently loaded.                        |
 |-------------------------------+----------------------------------------------------------------------------|
 
-Note:
+Notes:
 - For =evedel-process-directives=:
   - If at point: sends the directive under the point.
   - If a region is selected: sends all directives within the selected region.
@@ -51,6 +62,8 @@ Note:
 Below is an example of scaling existing instruction overlay (in this case, a reference) by invoking the =evedel-create-reference= command within a region that contains one:
 
 [[file:media/scaling-demo.gif]]
+
+*** Customization
 
 |-------------------------------------------+--------------------------------------------------|
 | *Custom Variables*                        | Description                                      |
@@ -65,10 +78,15 @@ Below is an example of scaling existing instruction overlay (in this case, a ref
 | =evedel-descriptive-mode-roles=           | Major modes to model roles association list      |
 |-------------------------------------------+--------------------------------------------------|
 
+*** Instruction Persistence
+
+If you have added instructions to your files and saved them, make sure to load them before resuming work on your project. Failing to do so, and loading them after making changes to your files, will lead to mismatched instruction overlays.
+
+To alleviate this until something more established is added, you could consult the project's [[file:.dir-locals.el]] to see how auto-saving/loading is done in the project.
+
 ** Setup
 
-Before proceeding, make sure you have [[https://github.com/karthink/gptel][GPTel]] configured. *This package will not work without it.*
-
+Before proceeding, make sure you have [[https://github.com/karthink/gptel][GPTel]] configured (see [[#requirements][requirements]]). *This package will not work without it.*
 Clone the Evedel repository:
    
 #+begin_src sh
@@ -96,14 +114,12 @@ Use =use-package= to configure Evedel as shown in the snippet below:
 #+end_src
    
 Make sure to replace ="/path/to/evedel"= with the actual path where you cloned the Evedel repository.
-
-
   
 ** Planned Features
 
 - Instruction navigation/listing/aggregation
 - Reference categorization
-- Auto-save/loading
+- More advanced auto-saving/loading. For now, you can consult the [[file:.dir-locals.el]] file that I use for the project to see how I handle automatic saving/loading of instructions for it.
 - LLM request logging
 - Diff facilities
 - Better overlay tracking on changes
