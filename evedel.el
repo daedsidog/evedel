@@ -559,6 +559,12 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
   "Returns non-nil if the instruction has a body."
   (= (overlay-start instr) (overlay-end instr)))
 
+(defun e--subinstruction-of-p (sub parent)
+  "Return T is instruction SUB is contained entirely within instruction PARENT."
+  (and (eq (overlay-buffer sub)
+           (overlay-buffer parent))
+       (<= (overlay-start parent) (overlay-start sub) (overlay-end sub) (overlay-end parent))))
+
 (cl-defun e--child-instructions (instruction)
   "Return the child direcct instructions of the given INSTRUCTION overlay."
   ;; Bodyless instructions cannot have any children.
@@ -1102,7 +1108,10 @@ Returns the prompt as a string."
   (let* ((is-programmer (derived-mode-p 'prog-mode))
          (toplevel-references (e--foreach-instruction
                                   inst when (and (e--referencep inst)
-                                                 (eq (e--topmost-instruction inst :reference) inst))
+                                                 (eq (e--topmost-instruction inst :reference) inst)
+                                                 ;; We do not wish to collect references that are
+                                                 ;; contained within directives. It's redundant.
+                                                 (not (e--subinstruction-of-p inst directive)))
                                   collect inst))
          ;; The references in the reference alist should be sorted by their order of appearance
          ;; in the buffer.
@@ -1249,8 +1258,9 @@ discrepancy."
                      "\n\n"
                      (format "For %s, %s"
                              (instruction-path-namestring directive-buffer)
-                             (expanded-directive-text directive)
-                             (response-directive-guide-text)))))
+                             (expanded-directive-text directive))
+                     "\n\n"
+                     (response-directive-guide-text))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
 (provide 'evedel)
