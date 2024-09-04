@@ -136,14 +136,15 @@ the internal bookkeeping and cleanup."
                      buffer-count
                      (if (= 1 buffer-count) "" "s")
                      path)))
-      (message "No Evedel instructions to save"))))
+      (when (called-interactively-p 'any)
+        (message "No Evedel instructions to save")))))
 
 ;;;###autoload
 (defun e-load-instructions (path)
   "Load instruction overlays from a file specified by PATH."
   (interactive (list (read-file-name "Instruction list file: ")))
   (when (and (e--instructions)
-             (called-interactively-p 'interactive))
+             (called-interactively-p 'any))
     (unless (y-or-n-p "Discard existing Evedel instructions? ")
       (user-error "Aborted")))
   (let* ((loaded-instructions (with-temp-buffer
@@ -165,7 +166,28 @@ the internal bookkeeping and cleanup."
             (with-current-buffer (get-buffer buffer)
               (e--restore-overlay (current-buffer) overlay-start overlay-end properties))
             (cl-incf restored)))))
-      (message "Restored %d out of %d Evedel instructions" restored total))))
+      (when (called-interactively-p 'any)
+        (message "Restored %d out of %d Evedel instructions from %s" restored total path)))))
+
+;;;###autoload
+(defun e-instruction-count ()
+  "Return the number of instructions currently loaded instructions.
+
+If called interactively, it messages the number of instructions and buffers."
+  (interactive)
+  (let ((count 0)
+        (buffer-hash (make-hash-table :test 'eq)))
+    (e--foreach-instruction instr count instr into instr-count
+                            do (puthash (overlay-buffer instr) t buffer-hash)
+                            finally (setf count instr-count))
+    (let ((buffers (hash-table-count buffer-hash)))
+      (when (called-interactively-p 'interactive)
+          (if (= count 0)
+              (message "No Evedel instructions currently loaded")
+            (message "Evedel is showing %d instruction%s from %d buffer%s"
+                     count (if (/= count 1) "s" "")
+                     buffers (if (/= buffers 1) "s" ""))))
+      count)))
 
 ;;;###autoload
 (defun e-create-reference ()
@@ -287,11 +309,11 @@ Throw a user error if no instructions to delete were found."
   (interactive)
   (let ((instructions (e--instructions))
         buffers)
-    (when (or (not (called-interactively-p 'interactive))
-              (and (called-interactively-p 'interactive)
+    (when (or (not (called-interactively-p 'any))
+              (and (called-interactively-p 'any)
                    instructions
                    (y-or-n-p "Are you sure you want to delete all instructions?")))
-      (when (called-interactively-p 'interactive)
+      (when (called-interactively-p 'any)
         (setq buffers (cl-remove-duplicates (mapcar #'overlay-buffer instructions))))
       (mapc #'e--delete-instruction instructions)
       (setq e--instructions nil)
@@ -558,6 +580,12 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
 (defun e--bodyless-instruction-p (instr)
   "Returns non-nil if the instruction has a body."
   (= (overlay-start instr) (overlay-end instr)))
+
+(defun e--subinstruction-of-p (sub parent)
+  "Return T is instruction SUB is contained entirely within instruction PARENT."
+  (and (eq (overlay-buffer sub)
+           (overlay-buffer parent))
+       (<= (overlay-start parent) (overlay-start sub) (overlay-end sub) (overlay-end parent))))
 
 (cl-defun e--child-instructions (instruction)
   "Return the child direcct instructions of the given INSTRUCTION overlay."
@@ -901,7 +929,7 @@ If OF-TYPE is nil, the instruction returned is the top-level one."
           (:directive
            (e--create-directive-in buffer start end)
            (cl-incf recreated)))))
-    (when (called-interactively-p 'interactive)
+    (when (called-interactively-p 'any)
       (message "Recreated %d out of %d Evedel instructions"
                recreated
                (length instructions)))))
@@ -1102,7 +1130,10 @@ Returns the prompt as a string."
   (let* ((is-programmer (derived-mode-p 'prog-mode))
          (toplevel-references (e--foreach-instruction
                                   inst when (and (e--referencep inst)
-                                                 (eq (e--topmost-instruction inst :reference) inst))
+                                                 (eq (e--topmost-instruction inst :reference) inst)
+                                                 ;; We do not wish to collect references that are
+                                                 ;; contained within directives. It's redundant.
+                                                 (not (e--subinstruction-of-p inst directive)))
                                   collect inst))
          ;; The references in the reference alist should be sorted by their order of appearance
          ;; in the buffer.
@@ -1249,8 +1280,9 @@ discrepancy."
                      "\n\n"
                      (format "For %s, %s"
                              (instruction-path-namestring directive-buffer)
-                             (expanded-directive-text directive)
-                             (response-directive-guide-text)))))
+                             (expanded-directive-text directive))
+                     "\n\n"
+                     (response-directive-guide-text))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
 (provide 'evedel)
