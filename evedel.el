@@ -668,22 +668,25 @@ Returns the deleted instruction overlay."
       (goto-char pos)
       (= pos (pos-bol)))))
 
-(defun e--fill-label-string (string &optional prefix-string buffer)
+(defun e--fill-label-string (string &optional prefix-string padding buffer)
   "Fill STRING into its label.
 
 If PREFIX-STRING is not nil, whitespace padding is added at the start of
 every newline in STRING so that it aligns visually under PREFIX-STRING.
 
+If PADDING is non-nil, then pad the entire string from the left with it.
+
 If BUFFER is provided, STRING will be wrapped to not overflow the fill column
 of BUFFER.  Wrapping will attempt to respect word boundaries and only hyphenate
 words as a last resort if a word is too long to fit on a line by itself."
-  (let* ((padding (if prefix-string
+  (let* ((paragraph-padding (if prefix-string
                       (make-string (length prefix-string) ? )
                     ""))
          (padding-fill-column (if buffer
                                   (- (with-current-buffer buffer
                                        fill-column)
-                                     (length padding))
+                                     (if (null padding) 0 (length padding))
+                                     (length paragraph-padding))
                                 nil)))
     (when (< padding-fill-column (length prefix-string))
       (setq padding-fill-column nil))
@@ -720,13 +723,15 @@ words as a last resort if a word is too long to fit on a line by itself."
                           (insert "\n"))
                       (forward-line)))))))))
       (goto-char (point-min))
+      (insert prefix-string)
       (forward-line)
+      (beginning-of-line)
       (while (not (eobp))
-        (insert padding)
+        (when padding
+          (insert padding))
+        (insert paragraph-padding)
         (beginning-of-line)
         (forward-line))
-      (goto-char (point-min))
-      (insert prefix-string)
       (string-trim (buffer-string)))))
 
 (defun e--update-instruction-overlay (instruction &optional update-children)
@@ -754,12 +759,17 @@ non-nil."
              (_           e-directive-color)))
          (aux (instruction &optional update-children priority (parent nil))
            (let ((instruction-type (e--instruction-type instruction))
+                 (padding (with-current-buffer (overlay-buffer instruction)
+                            (save-excursion
+                              (goto-char (overlay-start instruction))
+                              (make-string (current-column) ? ))))
                  (label "")
                  color)
              (pcase instruction-type
                (:reference ; REFERENCE
                 (setq color e-reference-color)
                 (if (and parent
+                         
                          (eq (e--instruction-type parent) :reference))
                     (setq label "SUBREFERENCE")
                   (setq label "REFERENCE")))
@@ -791,6 +801,7 @@ non-nil."
                                  label
                                  (e--fill-label-string directive
                                                        sublabel
+                                                       padding
                                                        (overlay-buffer instruction))))))))
              (let* ((parent-label-color
                      (if parent
@@ -807,33 +818,50 @@ non-nil."
                (overlay-put instruction 'e-bg-color bg-color)
                (overlay-put instruction 'e-label-color label-color)
                (overlay-put instruction 'priority priority)
-               (let (instruction-is-at-eol
-                     instruction-is-at-bol)
-                 (with-current-buffer (overlay-buffer instruction)
-                   (save-excursion
-                     (goto-char (overlay-end instruction))
-                     (setq instruction-is-at-eol (= (point) (pos-eol)))
-                     (goto-char (overlay-start instruction))
-                     (setq instruction-is-at-bol (= (point) (pos-bol)))))
-                 (overlay-put instruction
-                              'before-string
-                              (concat (unless instruction-is-at-bol "\n")
-                                      (propertize (concat
-                                                   label
-                                                   ;; Instructions without a body (such as bodyless
-                                                   ;; directives) look nicer without a newline
-                                                   ;; character after the label.
-                                                   (if (e--bodyless-instruction-p instruction)
-                                                       (unless instruction-is-at-eol
-                                                         "\n")
-                                                     "\n"))
-                                                  'face (list :extend t
-                                                              :inherit 'default
-                                                              :foreground label-color
-                                                              :background bg-color)))))
-               (overlay-put instruction
-                            'face
-                            `(:extend t :background ,bg-color))))
+               (let ((instruction-is-at-eol (with-current-buffer (overlay-buffer instruction)
+                                              (save-excursion
+                                                (goto-char (overlay-end instruction))
+                                                (= (point) (pos-eol))))))
+                 ;; Propertize specific parts of the before-string of the label, to give
+                 ;; the illusion that its a "sticker" in the buffer.
+                 (cl-labels
+                     ((add-label-props (beg end)
+                        (add-text-properties beg end
+                                             (list 'face (list :extend t
+                                                               :inherit 'default
+                                                               :foreground label-color
+                                                               :background bg-color)))))
+                   (let ((before-string
+                          (with-temp-buffer
+                            (insert label)
+                            (if (e--bodyless-instruction-p instruction)
+                                (unless instruction-is-at-eol
+                                  (insert "\n"))
+                              (insert "\n"))
+                            (goto-char (point-min))
+                            (end-of-line)
+                            (unless (eobp)
+                              (forward-char))
+                            (add-label-props (point-min) (point))
+                            (goto-char (point-min))
+                            (forward-line)
+                            (while (not (eobp))
+                              (beginning-of-line)
+                              (forward-char (length padding))
+                              (let ((went-to-next-line))
+                                (let ((mark (point)))
+                                  (end-of-line)
+                                  (unless (eobp)
+                                    (setq went-to-next-line t)
+                                    (forward-char))
+                                  (add-label-props mark (point)))
+                                (unless went-to-next-line
+                                  (forward-line))))
+                            (unless (e--bodyless-instruction-p instruction)
+                              (insert padding))
+                            (buffer-string))))
+                     (overlay-put instruction 'before-string before-string))))
+               (overlay-put instruction 'face `(:extend t :background ,bg-color))))
            (when update-children
              (dolist (child (e--child-instructions instruction))
                (aux child update-children (1+ priority) instruction)))))
