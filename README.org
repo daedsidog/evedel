@@ -39,6 +39,14 @@ Evedel's function revolves around the creation and manipulation of references an
 | =evedel-modify-directive= | Modify an existing directive instruction at point.                    |
 |---------------------------+-----------------------------------------------------------------------|
 
+Notes:
+- If the region mark started from outside the reference/directive overlay and a part of it is within the selected region, the instruction will be "shrunk" to fit the new region boundaries.
+- If the region mark started from inside the reference/directive overlay, the instruction will grow to include the entire new selection.
+
+Below is an example of scaling existing instruction overlay (in this case, a reference) by invoking the =evedel-create-reference= command within a region that contains one:
+
+[[file:media/scaling-demo.gif]]
+
 |-------------------------------+----------------------------------------------------------------------------|
 | *Processing & Management*     |                                                                            |
 |-------------------------------+----------------------------------------------------------------------------|
@@ -56,12 +64,19 @@ Notes:
   - If at point: sends the directive under the point.
   - If a region is selected: sends all directives within the selected region.
   - Otherwise, processes all directives in the current buffer.
-- If the region mark started from outside the reference/directive overlay and a part of it is within the selected region, the instruction will be "shrunk" to fit the new region boundaries.
-- If the region mark started from inside the reference/directive overlay, the instruction will grow to include the entire new selection.
 
-Below is an example of scaling existing instruction overlay (in this case, a reference) by invoking the =evedel-create-reference= command within a region that contains one:
+|-------------------------------+-------------------------------------------------------|
+| *Navigation*                  | Command Description                                   |
+|-------------------------------+-------------------------------------------------------|
+| =evedel-next-instruction=     | Cycle through instructions in the forward direction.  |
+| =evedel-previous-instruction= | Cycle through instructions in the backward direction. |
+| =evedel-next-reference=       | Cycle through references in the forward direction.    |
+| =evedel-previous-reference=   | Cycle through references in the backward direction.   |
+| =evedel-next-directive=       | Cycle through directives in the forward direction.    |
+| =evedel-previous-directive=   | Cycle through directives in the backward direction.   |
+|-------------------------------+-------------------------------------------------------|
 
-[[file:media/scaling-demo.gif]]
+
 
 *** Customization
 
@@ -117,7 +132,7 @@ Make sure to replace ="/path/to/evedel"= with the actual path where you cloned t
   
 ** Planned Features
 
-- Instruction navigation/listing/aggregation
+- +Instruction navigation+
 - Reference categorization
 - More advanced auto-saving/loading. For now, you can consult the [[file:.dir-locals.el]] file that I use for the project to see how I handle automatic saving/loading of instructions for it.
 - LLM request logging
