@@ -86,33 +86,46 @@ Answers the question \"who is the model?\""
 (defvar e--instructions ()
   "Association list mapping buffers to lists of instruction overlays.")
 (defvar e--default-instruction-priority -99)
+(defvar e--tags ())
 
-(defmacro e--foreach-instruction (instruction-binding &rest body)
-  "Iterate over `e--instructions' with INSTRUCTION-BINDING as the binding.
+(defmacro e--foreach-instruction (binding &rest body)
+  "Iterate over `e--instructions' with BINDING as the binding.
 
 Executes BODY inside a `cl-loop' form.
 
-The purpose of this macro is to be able to iterate over instructions while also
-making sure that the iterated instructions are valid, i.e. have an associated
-buffer to the overlay.
+BINDING can either be a symbol to bind the instruction to, or a
+list where the `car' is the symbol binding and the `cadr' is a buffer.
 
-This macro is the preferred way to iterate over instructions, as it handles all
-the internal bookkeeping and cleanup."
+If the buffer inside BINDING is non-nil, only iterate over the instructions
+that are located inside that buffer.
+
+The purpose of this macro is to be able to iterate over instructions
+while also making sure that the iterated instructions are valid, i.e.
+have an associated buffer to the overlay.
+
+This macro is the preferred way to iterate over instructions, as it 
+handles all the internal bookkeeping and cleanup."
   (declare (indent 1))
-  (cl-with-gensyms (cons)
-    `(progn
-       ;; Remove invalid buffers from the instruction alist.
-       (setq e--instructions
-             (cl-loop for ,cons in e--instructions
-                      do (setf (cdr ,cons)
-                               (cl-delete-if-not (lambda (inst)
-                                                   (bufferp (overlay-buffer inst)))
-                                                 (cdr ,cons)))
-                      when (cdr ,cons)
-                      collect ,cons))
-       (prog1 (cl-loop for ,instruction-binding
-                       in (flatten-tree (mapcar #'cdr e--instructions))
-                       ,@body)))))
+  (cl-with-gensyms (cons buffer marked-bufs)
+    (let ((instr (if (listp binding) (car binding) binding)))
+      `(let ((,buffer ,(if (listp binding) (cadr binding) nil)))
+         ;; Remove invalid buffers from the instruction alist.
+         (let ((,marked-bufs (cl-loop for ,cons in e--instructions
+                                      unless (and ,buffer (not (eq (car ,cons) ,buffer)))
+                                      do (setf (cdr ,cons)
+                                               (cl-delete-if-not (lambda (instr)
+                                                                   (bufferp (overlay-buffer instr)))
+                                                                 (cdr ,cons)))
+                                      when (null (cdr ,cons))
+                                      collect (car ,cons) into ,marked-bufs)))
+           (setq e--instructions (cl-remove-if (lambda (entry)
+                                                 (member (car entry) ,marked-bufs))
+                                               e--instructions)))
+         (prog1 (cl-loop for ,instr
+                         in (if ,buffer
+                                (alist-get ,buffer e--instructions)
+                              (flatten-tree (mapcar #'cdr e--instructions)))
+                         ,@body))))))
 
 ;;;###autoload
 (defun e-save-instructions (path)
@@ -326,6 +339,10 @@ Throw a user error if no instructions to delete were found."
                    buffer-count
                    (if (= 1 buffer-count) "" "s")))))))
 
+
+
+
+
 (defun e-convert-instructions ()
   "Convert instructions between reference and directive within the selected
 region or at point.
@@ -386,6 +403,108 @@ will throw a user error."
                  (if (> num-instructions 1) "s" ""))
         (when (region-active-p)
           (deactivate-mark))))))
+
+(defun e-next-instruction ()
+  "Cycle through instructions in the forward direction."
+  (interactive)
+  (unless (e--cycle-instruction nil :next)
+    (e--print-instruction-not-found :next nil)))
+
+(defun e-previous-instruction ()
+  "Cycle through instructions in the backward direction."
+  (interactive)
+  (unless (e--cycle-instruction nil :previous)
+    (e--print-instruction-not-found :previous nil)))
+
+(defun e-next-reference ()
+  "Cycle through references in the forward direction."
+  (interactive)
+  (unless (e--cycle-instruction :reference :next)
+    (e--print-instruction-not-found :next :reference)))
+
+(defun e-previous-reference ()
+  "Cycle through references in the backward direction."
+  (interactive)
+  (unless (e--cycle-instruction :reference :previous)
+    (e--print-instruction-not-found :previous :reference)))
+
+(defun e-next-directive ()
+  "Cycle through directives in the forward direction."
+  (interactive)
+  (unless (e--cycle-instruction :directive :next)
+    (e--print-instruction-not-found :next :directive)))
+
+(defun e-previous-directive ()
+  "Cycle through directives in the backward direction."
+  (interactive)
+  (unless (e--cycle-instruction :directive :previous)
+    (e--print-instruction-not-found :previous :directive)))
+
+(defun e--print-instruction-not-found (direction type)
+  "Print a not found message for the given DIRECTION and TYPE."
+  (let ((type-string (pcase type
+                       (:directive "directive")
+                       (:reference "reference")
+                       (_ "instruction"))))
+    (message "No %s %s found"
+             (if (eq direction :next) "next" "previous")
+             type-string)))
+
+(defun e--cycle-instruction (type direction)
+  "Get the next or previous instruction overlay of TYPE.
+DIRECTION should be `:next' or `:previous' from the current point.
+
+If no instruction found in the buffer, checks the next buffers in
+the `e--instructions' alist.
+
+Returns the found instruction, if any."
+  (let ((buffers (mapcar #'car e--instructions))
+        (original-buffer (current-buffer))
+        (found-instr))
+    (let ((prev-buffers ()))
+      (cl-do ((buflist buffers (cdr buflist)))
+          ((or (null buflist)
+               (eq original-buffer (car buflist)))
+           (nreverse prev-buffers)
+           (when buflist
+             (setf (cdr (last buflist)) prev-buffers)
+             (setq buffers buflist)))
+        (push (car buflist) prev-buffers)))
+    (while (and buffers (null found-instr))
+      (let* ((buffer (car buffers))
+             (instrs (e--foreach-instruction (instr buffer) collect instr)))
+        (setq buffers (delq buffer buffers))
+        (when type
+          (setq instrs (cl-remove-if-not (lambda (instr)
+                                           (eq (e--instruction-type instr) type))
+                                         instrs)))
+        (let ((sorting-pred (pcase direction
+                              (:next #'<)
+                              (:previous #'>))))
+          (with-current-buffer buffer
+            (cl-flet ((point-or-edge-pos ()
+                        (if (eq buffer original-buffer)
+                            (point)
+                          (pcase direction
+                            (:next (point-min))
+                            (:previous (point-max))))))
+              (setq instrs (cl-remove-if-not (lambda (instr)
+                                               (and (funcall sorting-pred
+                                                             (point-or-edge-pos)
+                                                             (overlay-start instr))
+                                                    (overlay-buffer instr)))
+                                             instrs))))
+          (setq instrs (sort instrs (lambda (instr1 instr2)
+                                      (funcall sorting-pred
+                                               (overlay-start instr1)
+                                               (overlay-start instr2)))))
+          (when-let ((instruction (car instrs)))
+            (let ((buffer (overlay-buffer instruction)))
+              (unless (eq buffer original-buffer)
+                (switch-to-buffer buffer)))
+            (goto-char (overlay-start instruction))
+            (setq found-instr instruction)))))
+    found-instr))
 
 (defun e--delete-instruction-at (point)
   "Delete the instruction at POINT.
@@ -523,12 +642,11 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
 
 Priority here refers to the priority property used by overlays."
   (cl-reduce (lambda (acc instruction)
-               (if (and (overlay-get instruction 'e-instruction)
-                        (or (not acc)
-                            (> (or (overlay-get instruction 'priority)
-                                   e--default-instruction-priority))
-                            (or (overlay-get acc 'priority)
-                                e--default-instruction-priority)))
+               (if (or (not acc)
+                       (> (or (overlay-get instruction 'priority)
+                              e--default-instruction-priority)
+                          (or (overlay-get acc 'priority)
+                              e--default-instruction-priority)))
                    instruction
                  acc))
              instructions
@@ -579,7 +697,7 @@ Priority here refers to the priority property used by overlays."
   (= (overlay-start instr) (overlay-end instr)))
 
 (defun e--subinstruction-of-p (sub parent)
-  "Return T is instruction SUB is contained entirely within instruction PARENT."
+  "Return t is instruction SUB is contained entirely within instruction PARENT."
   (and (eq (overlay-buffer sub)
            (overlay-buffer parent))
        (<= (overlay-start parent) (overlay-start sub) (overlay-end sub) (overlay-end parent))
@@ -940,7 +1058,7 @@ Does not return instructions that contain the region in its entirety."
                       (overlays-in start end))))
 
 (defun e--instructions ()
-  "Return a list of all Evedel instructions."
+  "Return a list of all currently loaded instructions."
   (e--foreach-instruction inst collect inst))
 
 (cl-defun e--topmost-instruction (instruction &optional of-type)
