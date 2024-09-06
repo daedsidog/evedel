@@ -927,12 +927,20 @@ non-nil."
                  ;; Propertize specific parts of the before-string of the label, to give
                  ;; the illusion that its a "sticker" in the buffer.
                  (cl-labels
-                     ((add-label-props (beg end)
-                        (add-text-properties beg end
-                                             (list 'face (list :extend t
-                                                               :inherit 'default
-                                                               :foreground label-color
-                                                               :background bg-color)))))
+                     ((colorize-region (beg end &optional fg bg)
+                        (unless (= beg end)
+                          (let ((fg (or fg label-color))
+                                (bg (or bg bg-color)))
+                            (add-text-properties beg end
+                                                 (list 'face (list :extend t
+                                                                   :inherit 'default
+                                                                   :foreground fg
+                                                                   :background bg))))))
+                      (colorize-region-as-parent (beg end)
+                        (when-let ((parent (e--parent-instruction instruction)))
+                          (colorize-region beg end
+                                           (overlay-get parent 'e-label-color)
+                                           (overlay-get parent 'e-bg-color)))))
                    (let ((before-string
                           (with-temp-buffer
                             (insert label)
@@ -944,23 +952,27 @@ non-nil."
                             (end-of-line)
                             (unless (eobp)
                               (forward-char))
-                            (add-label-props (point-min) (point))
+                            (colorize-region (point-min) (point))
                             (goto-char (point-min))
                             (forward-line)
                             (while (not (eobp))
                               (beginning-of-line)
-                              (forward-char (length padding))
+                              (let ((mark (point)))
+                                (forward-char (length padding))
+                                (colorize-region-as-parent mark (point)))
                               (let ((went-to-next-line))
                                 (let ((mark (point)))
                                   (end-of-line)
                                   (unless (eobp)
                                     (setq went-to-next-line t)
                                     (forward-char))
-                                  (add-label-props mark (point)))
+                                  (colorize-region mark (point)))
                                 (unless went-to-next-line
                                   (forward-line))))
                             (unless (e--bodyless-instruction-p instruction)
-                              (insert padding))
+                              (let ((mark (point)))
+                                (insert padding)
+                                (colorize-region-as-parent mark (point))))
                             (buffer-string))))
                      (overlay-put instruction 'before-string before-string))))
                (overlay-put instruction 'face `(:extend t :background ,bg-color))))
