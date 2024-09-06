@@ -551,9 +551,14 @@ function will resize it. See either `evedel-create-reference' or
                 (deactivate-mark)))
           ;; Else: there are no partially contained instructions of the same type within the
           ;; region...
-          (when intersecting-instructions
-            ;; ...but there are intersecting instructions of another type, which is bad.
-            (user-error "Cannot add intersecting instructions of different types"))
+          (when (or intersecting-instructions
+                    (or (cl-some (lambda (instr)
+                                   (and (= (overlay-start instr) (region-beginning))
+                                        (= (overlay-end instr) (region-end))))
+                                 (e--instructions-in (region-beginning) (region-end)))))
+            ;; ...but there are intersecting instructions of another type, or another instruction
+            ;; existing precisely at the start of another.
+            (user-error "Instruction intersects with existing instruction"))
           (let* ((buffer (current-buffer))
                  (instruction (if (eq type :reference)
                                   (e--create-reference-in buffer
@@ -632,7 +637,9 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
     (apply 'color-rgb-to-hex `(,@result 2))))
 
 (defun e--highest-priority-instruction (instructions)
-  "Return the instruction with the highest priority from the INSTRUCTIONS list."
+  "Return the instruction with the highest priority from the INSTRUCTIONS list.
+
+Priority here refers to the priority property used by overlays."
   (cl-reduce (lambda (acc instruction)
                (if (and (overlay-get instruction 'e-instruction)
                         (or (not acc)
@@ -676,24 +683,14 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
 
 (defun e--parent-instruction (instruction)
   "Return the parent of the given INSTRUCTION overlay."
-  (let ((buf (overlay-buffer instruction))
-        (start (overlay-start instruction))
-        (end (overlay-end instruction))
-        (smallest-overlay nil))
-    (with-current-buffer buf
-      (let ((min-start (point-min))
-            (max-end (point-max)))
-        (dolist (ov (overlays-in start end))
-          (let ((ov-start (overlay-start ov))
-                (ov-end (overlay-end ov)))
-            (when (and (not (eq ov instruction))
-                       (overlay-get ov 'e-instruction)
-                       (<= min-start ov-start start)
-                       (>= max-end ov-end start))
-              (setq smallest-overlay ov
-                    min-start ov-start
-                    max-end ov-end))))))
-    smallest-overlay))
+  (with-current-buffer (overlay-buffer instruction)
+    (let ((beg (overlay-start instruction))
+          (end (overlay-end instruction)))
+      (e--highest-priority-instruction (cl-remove-if-not (lambda (instr)
+                                                           (and (not (eq instr instruction))
+                                                                (<= (overlay-start instr) beg
+                                                                    end (overlay-end instr))))
+                                                         (e--instructions-in beg end))))))
 
 (defun e--bodyless-instruction-p (instr)
   "Returns non-nil if the instruction has a body."
@@ -703,17 +700,22 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
   "Return t is instruction SUB is contained entirely within instruction PARENT."
   (and (eq (overlay-buffer sub)
            (overlay-buffer parent))
-       (<= (overlay-start parent) (overlay-start sub) (overlay-end sub) (overlay-end parent))))
+       (<= (overlay-start parent) (overlay-start sub) (overlay-end sub) (overlay-end parent))
+       (and (/= (overlay-start parent) (overlay-start sub))
+            (/= (overlay-end parent) (overlay-end sub)))))
 
 (cl-defun e--child-instructions (instruction)
   "Return the child direcct instructions of the given INSTRUCTION overlay."
   ;; Bodyless instructions cannot have any children.
   (when (e--bodyless-instruction-p instruction)
     (cl-return-from e--child-instructions nil))
-  (let ((children (remove instruction
-                          (e--wholly-contained-instructions (overlay-buffer instruction)
-                                                              (overlay-start instruction)
-                                                              (overlay-end instruction)))))
+  (let ((children (cl-remove-if (lambda (instr)
+                                  (or (eq instr instruction)
+                                      (and (= (overlay-start instr) (overlay-start instruction))
+                                           (= (overlay-end instr) (overlay-end instruction)))))
+                                (e--wholly-contained-instructions (overlay-buffer instruction)
+                                                                  (overlay-start instruction)
+                                                                  (overlay-end instruction)))))
     (dolist (child children)
       (setq children (cl-set-difference children
                                         (e--child-instructions child))))
@@ -836,6 +838,12 @@ words as a last resort if a word is too long to fit on a line by itself."
         (forward-line))
       (string-trim (buffer-string)))))
 
+(defun e--instructions-congruent-p (a b)
+  "Returns t only if instruction overlays A and B are congruent."
+  (and (eq (overlay-buffer a) (overlay-buffer b))
+       (= (overlay-start a) (overlay-start b))
+       (= (overlay-end a) (overlay-end b))))
+
 (defun e--update-instruction-overlay (instruction &optional update-children)
   "Update the appearance of the INSTRUCTION overlay.
 
@@ -846,8 +854,6 @@ wish to reflect.
 
 Also updates the child instructions of the INSTRUCTION, if UPDATE-CHILDREN is
 non-nil."
-  (unless (e--instruction-p instruction)
-    (error "%s is not an instruction overlay" instruction))
   (let ((topmost-directive nil))
     (cl-labels
         ((directive-color (directive)
@@ -979,11 +985,19 @@ non-nil."
            (when update-children
              (dolist (child (e--child-instructions instruction))
                (aux child update-children (1+ priority) instruction)))))
-      (let ((parent (e--parent-instruction instruction)))
-        (let ((priority (if parent
-                            (1+ (overlay-get parent 'priority))
-                          e--default-instruction-priority)))
-          (aux instruction update-children priority parent))))))
+      (let ((instructions-conflicting (cl-some (lambda (instr)
+                                                 (and (not (eq instr instruction))
+                                                      (e--instructions-congruent-p instruction
+                                                                                   instr)))
+                                               (e--instructions-at (overlay-start instruction)))))
+        (if instructions-conflicting
+            ;; This instruction is causing conflicts, and therefore must be deleted.
+            (e--delete-instruction instruction)
+          (let ((parent (e--parent-instruction instruction)))
+            (let ((priority (if parent
+                                (1+ (overlay-get parent 'priority))
+                              e--default-instruction-priority)))
+              (aux instruction update-children priority parent))))))))
 
 (defun e--restore-overlay (buffer overlay-start overlay-end properties)
   "Helper function to restore an instruction overlay in BUFFER.
@@ -1033,12 +1047,12 @@ Optionally return only instructions of specific TYPE."
 (defun e--partially-contained-instructions (buffer start end)
   "Return instructions in BUFFER that overlap with START and END.
 
-Does not return instructions that contain the region in its entirety the region."
+Does not return instructions that contain the region in its entirety."
   (with-current-buffer buffer
     (cl-remove-if-not (lambda (ov)
                         (and (overlay-get ov 'e-instruction)
-                             (or (< (overlay-start ov) start)
-                                 (> (overlay-end ov) end))
+                             (or (<= (overlay-start ov) start)
+                                 (>= (overlay-end ov) end))
                              (not (and (<= (overlay-start ov) start)
                                        (>= (overlay-end ov) end)))))
                       (overlays-in start end))))
