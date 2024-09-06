@@ -403,6 +403,108 @@ will throw a user error."
         (when (region-active-p)
           (deactivate-mark))))))
 
+(defun e-next-instruction ()
+  "Cycle through instructions in the forward direction."
+  (interactive)
+  (unless (e--find-instruction nil :next)
+    (e--print-instruction-not-found :next nil)))
+
+(defun e-previous-instruction ()
+  "Cycle through instructions in the backward direction."
+  (interactive)
+  (unless (e--find-instruction nil :previous)
+    (e--print-instruction-not-found :previous nil)))
+
+(defun e-next-reference ()
+  "Cycle through references in the forward direction."
+  (interactive)
+  (unless (e--find-instruction :reference :next)
+    (e--print-instruction-not-found :next :reference)))
+
+(defun e-previous-reference ()
+  "Cycle through references in the backward direction."
+  (interactive)
+  (unless (e--find-instruction :reference :previous)
+    (e--print-instruction-not-found :previous :reference)))
+
+(defun e-next-directive ()
+  "Cycle through directives in the forward direction."
+  (interactive)
+  (unless (e--find-instruction :directive :next)
+    (e--print-instruction-not-found :next :directive)))
+
+(defun e-previous-directive ()
+  "Cycle through directives in the backward direction."
+  (interactive)
+  (unless (e--find-instruction :directive :previous)
+    (e--print-instruction-not-found :previous :directive)))
+
+(defun e--print-instruction-not-found (direction type)
+  "Print a not found message for the given DIRECTION and TYPE."
+  (let ((type-string (pcase type
+                       (:directive "directive")
+                       (:reference "reference")
+                       (_ "instruction"))))
+    (message "No %s %s found"
+             (if (eq direction :next) "next" "previous")
+             type-string)))
+
+(defun e--find-instruction (type direction)
+  "Get the next or previous instruction overlay of TYPE.
+DIRECTION should be `:next' or `:previous' from the current point.
+
+If no instruction found in the buffer, checks the next buffers in
+the `e--instructions' alist.
+
+Returns the found instruction, if any."
+  (let ((buffers (mapcar #'car e--instructions))
+        (original-buffer (current-buffer))
+        (found-instr))
+    (let ((prev-buffers ()))
+      (cl-do ((buflist buffers (cdr buflist)))
+          ((or (null buflist)
+               (eq original-buffer (car buflist)))
+           (nreverse prev-buffers)
+           (when buflist
+             (setf (cdr (last buflist)) prev-buffers)
+             (setq buffers buflist)))
+        (push (car buflist) prev-buffers)))
+    (while (and buffers (null found-instr))
+      (let* ((buffer (car buffers))
+             (instrs (alist-get buffer e--instructions)))
+        (setq buffers (delq buffer buffers))
+        (when type
+          (setq instrs (cl-remove-if-not (lambda (instr)
+                                           (eq (e--instruction-type instr) type))
+                                         instrs)))
+        (let ((sorting-pred (pcase direction
+                              (:next #'<)
+                              (:previous #'>))))
+          (with-current-buffer buffer
+            (cl-flet ((point-or-edge-pos ()
+                        (if (eq buffer original-buffer)
+                            (point)
+                          (pcase direction
+                            (:next (point-min))
+                            (:previous (point-max))))))
+              (setq instrs (cl-remove-if-not (lambda (instr)
+                                               (and (funcall sorting-pred
+                                                             (point-or-edge-pos)
+                                                             (overlay-start instr))
+                                                    (overlay-buffer instr)))
+                                             instrs))))
+          (setq instrs (sort instrs (lambda (instr1 instr2)
+                                      (funcall sorting-pred
+                                               (overlay-start instr1)
+                                               (overlay-start instr2)))))
+          (when-let ((instruction (car instrs)))
+            (let ((buffer (overlay-buffer instruction)))
+              (unless (eq buffer original-buffer)
+                (switch-to-buffer buffer)))
+            (goto-char (overlay-start instruction))
+            (setq found-instr instruction)))))
+    found-instr))
+
 (defun e--delete-instruction-at (point)
   "Delete the instruction at POINT.
 
@@ -598,7 +700,7 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
   (= (overlay-start instr) (overlay-end instr)))
 
 (defun e--subinstruction-of-p (sub parent)
-  "Return T is instruction SUB is contained entirely within instruction PARENT."
+  "Return t is instruction SUB is contained entirely within instruction PARENT."
   (and (eq (overlay-buffer sub)
            (overlay-buffer parent))
        (<= (overlay-start parent) (overlay-start sub) (overlay-end sub) (overlay-end parent))))
@@ -930,7 +1032,7 @@ Does not return instructions that contain the region in its entirety the region.
                       (overlays-in start end))))
 
 (defun e--instructions ()
-  "Return a list of all Evedel instructions."
+  "Return a list of all currently loaded instructions."
   (e--foreach-instruction inst collect inst))
 
 (cl-defun e--topmost-instruction (instruction &optional of-type)
