@@ -466,9 +466,9 @@ will throw a user error."
   "Add tags to the instruction under the point."
   (interactive)
   (let* ((instructions (e--instructions-at (point)))
-         (highest-priority-instruction (e--highest-priority-instruction instructions))
+         (instr (e--highest-priority-instruction instructions))
          (tags-hash (make-hash-table :test 'eq)))
-    (if highest-priority-instruction
+    (if instr
         (progn
           ;; Collect existing tags from all instructions.
           (e--foreach-instruction (instr)
@@ -478,32 +478,24 @@ will throw a user error."
           (let* ((existing-tags (hash-table-keys tags-hash))
                  (input (completing-read-multiple "Add tags: " existing-tags nil nil)))
             (let ((new-tags (mapcar 'intern input)))
-              (let ((added (e--add-tags highest-priority-instruction new-tags)))
-                (message "%d tag%s added" added (if (= added 1) "" "s"))
-                (when (> added 0)
-                  (e--update-instruction-overlay highest-priority-instruction))))))
+              (let ((added (e--add-tags instr new-tags)))
+                (message "%d tag%s added" added (if (= added 1) "" "s"))))))
       (user-error "No instructions at point"))))
 
 (defun e-remove-tags ()
   "Remove tags from the instruction under the point."
   (interactive)
   (let* ((instructions (e--instructions-at (point)))
-         (highest-priority-instruction (e--highest-priority-instruction instructions))
-         (tags-hash (make-hash-table :test 'eq)))
-    (if highest-priority-instruction
-        (progn
-          ;; Collect existing tags from all instructions.
-          (e--foreach-instruction (instr)
-            do (cl-loop for tag in (e--instruction-tags instr)
-                        do (puthash tag t tags-hash)))
-          ;; Prompt the user to remove tags.
-          (let* ((existing-tags (hash-table-keys tags-hash))
-                 (input (completing-read-multiple "Remove tags: " existing-tags nil t)))
-            (let ((tags-to-remove (mapcar 'intern input)))
-              (let ((removed (e--remove-tags highest-priority-instruction tags-to-remove)))
-                (message "%d tag%s removed" removed (if (= removed 1) "" "s"))
-                (when (> removed 0)
-                  (e--update-instruction-overlay highest-priority-instruction))))))
+         (instr (e--highest-priority-instruction instructions)))
+    (if instr
+        (let ((tags-list (e--instruction-tags instr)))
+          (if (null tags-list)
+              (user-error "Instruction has no tags of its own to remove")
+            ;; Prompt the user to remove tags.
+            (let* ((input (completing-read-multiple "Remove tags: " tags-list nil t))
+                   (tags-to-remove (mapcar 'intern input)))
+              (let ((removed (e--remove-tags instr tags-to-remove)))
+                (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
       (user-error "No instructions at point"))))
 
 (defun e--cycle-instruction (type direction)
@@ -563,28 +555,42 @@ Returns the found instruction, if any."
     found-instr))
 
 (defun e--add-tags (instruction tags)
-  "Add TAGS to INSTRUCTION's `evedel-tags' property, avoiding duplication.
+  "Add TAGS to INSTRUCTION.
 
 TAGS should be a list of symbols.
 Returns the number of new tags added."
-  (let* ((existing-tags (overlay-get instruction 'e-tags))
+  (let* ((tag-type (if (e--referencep instruction)
+                       'e-reference-tags
+                     'e-directive-tags))
+         (existing-tags (overlay-get instruction tag-type))
          (new-tags (cl-remove-if (lambda (tag) (member tag existing-tags)) tags)))
-    (overlay-put instruction 'e-tags (cl-union existing-tags new-tags :test 'eq))
-    (length new-tags)))
+    (overlay-put instruction tag-type (cl-union existing-tags new-tags :test 'eq))
+    (let ((added (length new-tags)))
+      (when (> added 0)
+        (e--update-instruction-overlay instruction t))
+      added)))
 
 (defun e--remove-tags (instruction tags)
-  "Remove TAGS from INSTRUCTION's `evedel-tags' property, avoiding removal of non-existent tags.
+  "Remove TAGS from INSTRUCTION.
 
 TAGS should be a list of symbols.
 Returns the number of tags removed."
-  (let* ((existing-tags (overlay-get instruction 'e-tags))
+  (let* ((tag-type (if (e--referencep instruction)
+                       'e-reference-tags
+                     'e-directive-tags))
+         (existing-tags (overlay-get instruction tag-type))
          (new-tags (cl-set-difference existing-tags tags :test 'eq)))
-    (overlay-put instruction 'e-tags new-tags)
-    (- (length existing-tags) (length new-tags))))
+    (overlay-put instruction tag-type new-tags)
+    (let ((removed (- (length existing-tags) (length new-tags))))
+      (when (> removed 0)
+        (e--update-instruction-overlay instruction t))
+      removed)))
 
 (defun e--instruction-tags (instruction)
   "Return the list of tags for the given INSTRUCTION."
-  (overlay-get instruction 'e-tags))
+  (if (eq (overlay-get instruction 'e-instruction-type) :reference)
+      (overlay-get instruction 'e-reference-tags)
+    (overlay-get instruction 'e-tags)))
 
 (defun e--delete-instruction-at (point)
   "Delete the instruction at POINT.
@@ -945,6 +951,9 @@ non-nil."
              (:succeeded  e-directive-success-color)
              (:failed     e-directive-fail-color)
              (_           e-directive-color)))
+         (propertized-string-from-tags (tags)
+           (propertize (string-join (mapcar #'symbol-name tags) " ")
+                       'face 'font-lock-constant-face))
          (aux (instruction &optional update-children priority (parent nil))
            (let ((instruction-type (e--instruction-type instruction))
                  (padding (with-current-buffer (overlay-buffer instruction)
@@ -960,7 +969,15 @@ non-nil."
                          
                          (eq (e--instruction-type parent) :reference))
                     (setq label "SUBREFERENCE")
-                  (setq label "REFERENCE")))
+                  (setq label "REFERENCE"))
+                (when-let ((tags (e--instruction-tags instruction)))
+                  (setq label (concat
+                               label
+                               "\n"
+                               (e--fill-label-string (propertized-string-from-tags tags)
+                                                     "TAGS: "
+                                                     padding
+                                                     (overlay-buffer instruction))))))
                (:directive ; DIRECTIVE
                 (when (and (null topmost-directive) (overlay-get instruction
                                                                  'e-directive-status))
@@ -1017,11 +1034,11 @@ non-nil."
                         (unless (= beg end)
                           (let ((fg (or fg label-color))
                                 (bg (or bg bg-color)))
-                            (add-text-properties beg end
-                                                 (list 'face (list :extend t
-                                                                   :inherit 'default
-                                                                   :foreground fg
-                                                                   :background bg))))))
+                            (add-face-text-property beg end
+                                                    (list :extend t
+                                                          :foreground fg
+                                                          :background bg)
+                                                    t))))
                       (colorize-region-as-parent (beg end)
                         (when-let ((parent (e--parent-instruction instruction)))
                           (colorize-region beg end
