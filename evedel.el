@@ -86,12 +86,12 @@ Answers the question \"who is the model?\""
 (defvar e--instructions ()
   "Association list mapping buffers to lists of instruction overlays.")
 (defvar e--default-instruction-priority -99)
-(defvar e--tags ())
 
 (defmacro e--foreach-instruction (binding &rest body)
-  "Iterate over `e--instructions' with BINDING as the binding.
+  "Iterate over `evedel--instructions' with BINDING as the binding.
 
-Executes BODY inside a `cl-loop' form.
+Executes BODY inside an existing `cl-loop' form, which means that the macro is
+expecting for BODY to be written in the `cl-loop' DSL.
 
 BINDING can either be a symbol to bind the instruction to, or a
 list where the `car' is the symbol binding and the `cadr' is a buffer.
@@ -355,10 +355,6 @@ Throw a user error if no instructions to delete were found."
                    buffer-count
                    (if (= 1 buffer-count) "" "s")))))))
 
-
-
-
-
 (defun e-convert-instructions ()
   "Convert instructions between reference and directive within the selected
 region or at point.
@@ -466,12 +462,56 @@ will throw a user error."
              (if (eq direction :next) "next" "previous")
              type-string)))
 
+(defun e-add-tags ()
+  "Add tags to the instruction under the point."
+  (interactive)
+  (let* ((instructions (e--instructions-at (point)))
+         (highest-priority-instruction (e--highest-priority-instruction instructions))
+         (tags-hash (make-hash-table :test 'eq)))
+    (if highest-priority-instruction
+        (progn
+          ;; Collect existing tags from all instructions.
+          (e--foreach-instruction (instr)
+            do (cl-loop for tag in (e--instruction-tags instr)
+                        do (puthash tag t tags-hash)))
+          ;; Prompt the user to add tags.
+          (let* ((existing-tags (hash-table-keys tags-hash))
+                 (input (completing-read-multiple "Add tags: " existing-tags nil nil)))
+            (let ((new-tags (mapcar 'intern input)))
+              (let ((added (e--add-tags highest-priority-instruction new-tags)))
+                (message "%d tag%s added" added (if (= added 1) "" "s"))
+                (when (> added 0)
+                  (e--update-instruction-overlay highest-priority-instruction))))))
+      (user-error "No instructions at point"))))
+
+(defun e-remove-tags ()
+  "Remove tags from the instruction under the point."
+  (interactive)
+  (let* ((instructions (e--instructions-at (point)))
+         (highest-priority-instruction (e--highest-priority-instruction instructions))
+         (tags-hash (make-hash-table :test 'eq)))
+    (if highest-priority-instruction
+        (progn
+          ;; Collect existing tags from all instructions.
+          (e--foreach-instruction (instr)
+            do (cl-loop for tag in (e--instruction-tags instr)
+                        do (puthash tag t tags-hash)))
+          ;; Prompt the user to remove tags.
+          (let* ((existing-tags (hash-table-keys tags-hash))
+                 (input (completing-read-multiple "Remove tags: " existing-tags nil t)))
+            (let ((tags-to-remove (mapcar 'intern input)))
+              (let ((removed (e--remove-tags highest-priority-instruction tags-to-remove)))
+                (message "%d tag%s removed" removed (if (= removed 1) "" "s"))
+                (when (> removed 0)
+                  (e--update-instruction-overlay highest-priority-instruction))))))
+      (user-error "No instructions at point"))))
+
 (defun e--cycle-instruction (type direction)
   "Get the next or previous instruction overlay of TYPE.
 DIRECTION should be `:next' or `:previous' from the current point.
 
 If no instruction found in the buffer, checks the next buffers in
-the `e--instructions' alist.
+the `evedel--instructions' alist.
 
 Returns the found instruction, if any."
   (let ((buffers (mapcar #'car e--instructions))
@@ -521,6 +561,30 @@ Returns the found instruction, if any."
             (goto-char (overlay-start instruction))
             (setq found-instr instruction)))))
     found-instr))
+
+(defun e--add-tags (instruction tags)
+  "Add TAGS to INSTRUCTION's `evedel-tags' property, avoiding duplication.
+
+TAGS should be a list of symbols.
+Returns the number of new tags added."
+  (let* ((existing-tags (overlay-get instruction 'e-tags))
+         (new-tags (cl-remove-if (lambda (tag) (member tag existing-tags)) tags)))
+    (overlay-put instruction 'e-tags (cl-union existing-tags new-tags :test 'eq))
+    (length new-tags)))
+
+(defun e--remove-tags (instruction tags)
+  "Remove TAGS from INSTRUCTION's `evedel-tags' property, avoiding removal of non-existent tags.
+
+TAGS should be a list of symbols.
+Returns the number of tags removed."
+  (let* ((existing-tags (overlay-get instruction 'e-tags))
+         (new-tags (cl-set-difference existing-tags tags :test 'eq)))
+    (overlay-put instruction 'e-tags new-tags)
+    (- (length existing-tags) (length new-tags))))
+
+(defun e--instruction-tags (instruction)
+  "Return the list of tags for the given INSTRUCTION."
+  (overlay-get instruction 'e-tags))
 
 (defun e--delete-instruction-at (point)
   "Delete the instruction at POINT.
