@@ -462,41 +462,43 @@ will throw a user error."
              (if (eq direction :next) "next" "previous")
              type-string)))
 
-(defun e-add-tags ()
-  "Add tags to the instruction under the point."
-  (interactive)
-  (let* ((instructions (e--instructions-at (point)))
-         (instr (e--highest-priority-instruction instructions))
-         (tags-hash (make-hash-table :test 'eq)))
-    (if instr
-        (progn
-          ;; Collect existing tags from all instructions.
-          (e--foreach-instruction (instr)
-            do (cl-loop for tag in (e--instruction-tags instr)
-                        do (puthash tag t tags-hash)))
-          ;; Prompt the user to add tags.
-          (let* ((existing-tags (hash-table-keys tags-hash))
-                 (input (completing-read-multiple "Add tags: " existing-tags nil nil)))
-            (let ((new-tags (mapcar 'intern input)))
-              (let ((added (e--add-tags instr new-tags)))
-                (message "%d tag%s added" added (if (= added 1) "" "s"))))))
-      (user-error "No instructions at point"))))
+(defun e--available-tags ()
+  "Return a list of all the tags in the loaded references."
+  (let ((tags-hash (make-hash-table)))
+    (e--foreach-instruction (ref)
+      do (when (e--referencep ref)
+           (cl-loop for tag in (e--reference-tags ref)
+                    do (puthash tag t tags-hash))))
+    (hash-table-keys tags-hash)))
 
-(defun e-remove-tags ()
-  "Remove tags from the instruction under the point."
+(defun e-add-tags ()
+  "Add tags to the reference under the point."
   (interactive)
-  (let* ((instructions (e--instructions-at (point)))
+  (let* ((instructions (e--instructions-at (point) :reference))
          (instr (e--highest-priority-instruction instructions)))
     (if instr
-        (let ((tags-list (e--instruction-tags instr)))
+        (let* ((existing-tags (e--available-tags))
+               (input (completing-read-multiple "Add tags: " existing-tags nil nil))
+               (new-tags (mapcar 'intern input)))
+            (let ((added (e--add-tags instr new-tags)))
+              (message "%d tag%s added" added (if (= added 1) "" "s"))))
+      (user-error "No reference at point"))))
+
+(defun e-remove-tags ()
+  "Remove tags from the reference under the point."
+  (interactive)
+  (let* ((instructions (e--instructions-at (point) :reference))
+         (instr (e--highest-priority-instruction instructions)))
+    (if instr
+        (let ((tags-list (e--reference-tags instr)))
           (if (null tags-list)
-              (user-error "Instruction has no tags of its own to remove")
+              (user-error "Reference has no tags of its own to remove")
             ;; Prompt the user to remove tags.
             (let* ((input (completing-read-multiple "Remove tags: " tags-list nil t))
                    (tags-to-remove (mapcar 'intern input)))
               (let ((removed (e--remove-tags instr tags-to-remove)))
                 (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
-      (user-error "No instructions at point"))))
+      (user-error "No reference at point"))))
 
 (defun e--cycle-instruction (type direction)
   "Get the next or previous instruction overlay of TYPE.
@@ -586,11 +588,9 @@ Returns the number of tags removed."
         (e--update-instruction-overlay instruction t))
       removed)))
 
-(defun e--instruction-tags (instruction)
-  "Return the list of tags for the given INSTRUCTION."
-  (if (eq (overlay-get instruction 'e-instruction-type) :reference)
-      (overlay-get instruction 'e-reference-tags)
-    (overlay-get instruction 'e-tags)))
+(defun e--reference-tags (reference)
+  "Return the list of tags for the given REFERENCE."
+  (overlay-get instruction 'e-reference-tags))
 
 (defun e--delete-instruction-at (point)
   "Delete the instruction at POINT.
@@ -970,7 +970,7 @@ non-nil."
                          (eq (e--instruction-type parent) :reference))
                     (setq label "SUBREFERENCE")
                   (setq label "REFERENCE"))
-                (when-let ((tags (e--instruction-tags instruction)))
+                (when-let ((tags (e--reference-tags instruction)))
                   (setq label (concat
                                label
                                "\n"
