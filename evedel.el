@@ -556,41 +556,37 @@ Returns the found instruction, if any."
             (setq found-instr instruction)))))
     found-instr))
 
-(defun e--add-tags (instruction tags)
-  "Add TAGS to INSTRUCTION.
+(defun e--add-tags (reference tags)
+  "Add TAGS to REFERENCE.
 
 TAGS should be a list of symbols.
 Returns the number of new tags added."
-  (let* ((tag-type (if (e--referencep instruction)
-                       'e-reference-tags
-                     'e-directive-tags))
-         (existing-tags (overlay-get instruction tag-type))
+  (let* ((tag-type 'e-reference-tags)
+         (existing-tags (overlay-get reference tag-type))
          (new-tags (cl-remove-if (lambda (tag) (member tag existing-tags)) tags)))
-    (overlay-put instruction tag-type (cl-union existing-tags new-tags :test 'eq))
+    (overlay-put reference tag-type (cl-union existing-tags new-tags :test 'eq))
     (let ((added (length new-tags)))
       (when (> added 0)
-        (e--update-instruction-overlay instruction t))
+        (e--update-instruction-overlay reference t))
       added)))
 
-(defun e--remove-tags (instruction tags)
-  "Remove TAGS from INSTRUCTION.
+(defun e--remove-tags (reference tags)
+  "Remove TAGS from REFERENCE.
 
 TAGS should be a list of symbols.
 Returns the number of tags removed."
-  (let* ((tag-type (if (e--referencep instruction)
-                       'e-reference-tags
-                     'e-directive-tags))
-         (existing-tags (overlay-get instruction tag-type))
+  (let* ((tag-type 'e-reference-tags)
+         (existing-tags (overlay-get reference tag-type))
          (new-tags (cl-set-difference existing-tags tags :test 'eq)))
-    (overlay-put instruction tag-type new-tags)
+    (overlay-put reference tag-type new-tags)
     (let ((removed (- (length existing-tags) (length new-tags))))
       (when (> removed 0)
-        (e--update-instruction-overlay instruction t))
+        (e--update-instruction-overlay reference t))
       removed)))
 
 (defun e--reference-tags (reference)
   "Return the list of tags for the given REFERENCE."
-  (overlay-get instruction 'e-reference-tags))
+  (overlay-get reference 'e-reference-tags))
 
 (defun e--delete-instruction-at (point)
   "Delete the instruction at POINT.
@@ -1035,7 +1031,8 @@ non-nil."
                           (let ((fg (or fg label-color))
                                 (bg (or bg bg-color)))
                             (add-face-text-property beg end
-                                                    (list :extend t
+                                                    (list :inherit 'default
+                                                          :extend t
                                                           :foreground fg
                                                           :background bg)
                                                     t))))
