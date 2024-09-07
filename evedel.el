@@ -658,12 +658,11 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
 
 Priority here refers to the priority property used by overlays."
   (cl-reduce (lambda (acc instruction)
-               (if (and (overlay-get instruction 'e-instruction)
-                        (or (not acc)
-                            (> (or (overlay-get instruction 'priority)
-                                   e--default-instruction-priority))
-                            (or (overlay-get acc 'priority)
-                                e--default-instruction-priority)))
+               (if (or (not acc)
+                       (> (or (overlay-get instruction 'priority)
+                              e--default-instruction-priority)
+                          (or (overlay-get acc 'priority)
+                              e--default-instruction-priority)))
                    instruction
                  acc))
              instructions
