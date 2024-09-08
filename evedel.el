@@ -70,6 +70,25 @@
   :type 'float
   :group 'evedel)
 
+(defcustom e-empty-tag-query-references-all t
+  "Determines behavior of directives without a tag search query.
+
+If set to t, directives without a specific tag search query will use all
+available references.  Alternatively, if this is set to nil, directives without 
+a search query will not use any references."
+  :type 'boolean
+  :group 'evedel)
+
+(defcustom e-always-include-untagged-references t
+  "Controls inclusion of untagged references in directive prompts.
+
+When set to t, untagged references are always incorporated into directive
+references, ensuring comprehensive coverage.  Conversely, when set to nil,
+untagged references are ignored, streamlining the directive references to only
+include tagged items."
+  :type 'boolean
+  :group 'evedel)
+
 (defcustom e-descriptive-mode-roles
   '((emacs-lisp-mode . "an Emacs Lisp programmer")
     (js-mode         . "a JavaScript programmer")
@@ -462,6 +481,94 @@ will throw a user error."
              (if (eq direction :next) "next" "previous")
              type-string)))
 
+(defun e--tag-query-prefix-from-infix (query)
+  "Transform the tag QUERY to prefix notation for Lisp.
+  
+Signals an error when the query is malformed."
+  (cl-labels ((operatorp (elm)
+                (member elm '(and or not)))
+              (unary-op-p (elm)
+                (eq elm 'not))
+              (binary-op-p (elm)
+                (member elm '(and or)))
+              (expressionp (elm)
+                (or (atomp elm) (listp elm)))
+              (atomp (elm)
+                (and (not (listp elm)) (not (operatorp elm))))
+              (expand-implicit-and-ops (expr)
+                (let ((result '()))
+                  (dolist (elm expr)
+                    (let ((prev (car result)))
+                      (cond
+                       ((binary-op-p elm)
+                        (cond
+                         ((binary-op-p prev)
+                          (error "Consecutive binary operators: %s, %s" prev elm))
+                         ((not (expressionp prev))
+                          (error "Binary operator follows operator: %s, %s" prev elm))))
+                       ((unary-op-p elm)
+                        (cond
+                         ((unary-op-p prev)
+                          (error "Consecutive unary operator: %s" prev)))))
+                      (when (and (not (binary-op-p elm)) prev (not (operatorp prev)))
+                        (push 'and result))
+                      (push elm result)))
+                  (cond
+                   ((operatorp (car result))
+                    (error "Operator not followed by any expression: %s" (car result)))
+                   ((binary-op-p (car (last result)))
+                    (error "Binary operator not following any expression: %s" (car (last result)))))
+                  (nreverse result)))
+              (aux (elm)
+                (pcase elm
+                  ((pred atomp) elm)
+                  ((pred expressionp)
+                   (let ((expanded-expr (expand-implicit-and-ops elm))
+                         (toplevel-op nil)
+                         (operator nil)
+                         (multiplicative-exprs ())
+                         (operatorless-arg nil)
+                         (args ())
+                         (negate-next-expr nil))
+                     (dolist (elm expanded-expr)
+                       (pcase elm
+                         ((pred expressionp)
+                          (if (null operator)
+                              (if (not negate-next-expr)
+                                  (setq operatorless-arg (aux elm))
+                                (setq operatorless-arg `(not ,(aux elm)))
+                                (setq negate-next-expr nil))
+                            (cl-symbol-macrolet ((dst (if (eq operator 'and)
+                                                          multiplicative-exprs
+                                                        args)))
+                              (when operatorless-arg
+                                (push operatorless-arg dst)
+                                (setq operatorless-arg nil))
+                              (if (not negate-next-expr)
+                                  (push (aux elm) dst)
+                                (push `(not ,(aux elm)) dst)
+                                (setq negate-next-expr nil)))))
+                         ((pred operatorp)
+                          (if (unary-op-p elm)
+                              (setq negate-next-expr t)
+                            (unless (eq toplevel-op 'or)
+                              (setq toplevel-op elm))
+                            (setq operator elm)
+                            (unless (eq operator 'and)
+                              (when multiplicative-exprs
+                                (push `(and ,@(nreverse multiplicative-exprs)) args)
+                                (setq multiplicative-exprs ())))))))
+                     (if operatorless-arg
+                         operatorless-arg
+                       (if args
+                           (progn
+                             (when multiplicative-exprs
+                               (push `(and ,@multiplicative-exprs) args))
+                             `(,toplevel-op ,@(nreverse args)))
+                         (when multiplicative-exprs
+                           `(and ,@(nreverse multiplicative-exprs))))))))))
+    (aux query)))
+                 
 (defun e--available-tags ()
   "Return a list of all the tags in the loaded references."
   (let ((tags-hash (make-hash-table)))
