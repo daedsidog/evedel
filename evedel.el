@@ -272,7 +272,7 @@ command will resize the directive in the following manner:
                          (e--instructions-at (point) :directive))))
     (when (eq (overlay-get directive 'e-directive-status) :processing)
       (user-error "Cannot modify a directive that is being processed"))
-    (e--directive-prompt directive)))
+    (e--read-directive directive)))
 
 (defun e-process-directives ()
   "Send directives to model via gptel.
@@ -471,6 +471,27 @@ will throw a user error."
   (unless (e--cycle-instruction :directive :previous)
     (e--print-instruction-not-found :previous :directive)))
 
+;; (defun e-add-directive-tag-query (query)
+;;   "Prompt the minibuffer to enter a tag search query for a directive.
+
+;; The directive in question is either the directive under the curent point in the
+;; buffer or the directive for which the prompt is currently being written for.
+
+;; A tag query is an infix expression, containing symbol atoms and the operator
+;; symbols: AND, OR, NOT.  If no operator is present between two expressions, then
+;; an implicit AND operator is assumed.
+
+;; Examples:
+;;   (signature and function and doc)
+;;   (not dog or not cat)
+;;   (cat or dog or (sheep and black))
+;;   ((cat and dog) or (dog and goose))")
+;;   (interactive)
+;;   (let ((directive (e--get-current-directive)))
+;;     (let ((prefix-query (e--tag-query-prefix-from-infix query)))
+;;       ;; Assuming `apply-tag-query-to-directive` is defined elsewhere.
+;;       (apply-tag-query-to-directive directive prefix-query)))
+  
 (defun e--print-instruction-not-found (direction type)
   "Print a not found message for the given DIRECTION and TYPE."
   (let ((type-string (pcase type
@@ -933,7 +954,8 @@ non-nil prevents the opening of a prompt buffer."
     (overlay-put ov 'e-directive (or directive-text ""))
     (e--update-instruction-overlay ov (not bodyless))
     (unless directive-text
-      (e--directive-prompt ov)) ; This switches to another buffer.
+      (deactivate-mark)
+      (e--read-directive ov))
     ov))
 
 (defun e--delete-instruction (instruction)
@@ -1307,81 +1329,38 @@ If OF-TYPE is nil, the instruction returned is the top-level one."
                recreated
                (length instructions)))))
 
-(defun e--directive-prompt (directive-instruction)
-  "Split current frame vertically by 1/3 and open a directive prompt buffer buffer.
+(defun e--directive-text (directive)
+  "Return the directive text of the DIRECTIVE overlay."
+  (overlay-get directive 'e-directive))
 
-DIRECTIVE-INSTRUCTION is the overlay to associate with the buffer."
-  (let ((prompt-buffer-name "*evedel-directive-prompt*"))
-    ;; Close an existing prompt buffer, if any.
-    (when (get-buffer prompt-buffer-name)
-      (switch-to-buffer prompt-buffer-name)
-      (e--directive-abort-function t))
-    (let ((new-window (split-window-vertically (- (round (* 0.333 (window-total-height)))))))
-      (select-window new-window)
-      (switch-to-buffer prompt-buffer-name)))
-  (text-mode)
-  (setq-local e--directive-overlay directive-instruction)
-  (setq-local e--buffer-killable nil)
-  (setq-local e--original-directive (overlay-get directive-instruction 'e-directive))
-  (unless (zerop (length e--original-directive))
-    (insert e--original-directive))
-  (setq header-line-format
-        (concat " Write the directive to the LLM.  "
-                (propertize "C-c C-c" 'face 'help-key-binding) ": apply, "
-                (propertize "C-c C-k" 'face 'help-key-binding) ": abort."))
-  (setq-local kill-buffer-query-functions
-              (list (lambda ()
-                      (if (not e--buffer-killable)
-                          (user-error (concat "Do not kill this buffer.  Use "
-                                              (propertize "C-c C-k" 'face 'help-key-binding)
-                                              " to abort"))
-                        t))))
-  (add-hook 'after-change-functions
-            (lambda (_beg _end _len)
-              (overlay-put e--directive-overlay 'e-directive (buffer-string))
-              ;; Reset the status of the directive to be normal, if it is not one already.
-              (let ((status (overlay-get e--directive-overlay 'e-directive-status)))
-                (when status
-                  (overlay-put e--directive-overlay 'e-directive-status nil)))
-              (e--update-instruction-overlay e--directive-overlay t))
-            nil t)
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c C-c") 'e--directive-apply-function)
-    (define-key map (kbd "C-c C-k") 'e--directive-abort-function)
-    (use-local-map map)))
-
-(defun e--directive-apply-function ()
-  "Apply change made to the directive instruction."
-  (interactive)
-  (make-local-variable 'e--directive-overlay)
-  (let* ((buffer (current-buffer))
-         (string (buffer-string)))
-    (if (string-empty-p string)
-        ;; We don't need to update the overlay because it will already be updated from the
-        ;; modification hook.
-        (e--delete-instruction e--directive-overlay)
-      (overlay-put e--directive-overlay 'e-directive string))
-    (setq-local e--buffer-killable t)
-    (delete-window)
-    (kill-buffer buffer)))
-
-(defun e--directive-abort-function (&optional no-error)
-  "Abort change made to the directive instruction.
-
-If NO-ERROR is non-nil, do not throw a user error."
-  (interactive)
-  (make-local-variable 'e--original-directive)
-  (make-local-variable 'e--directive-overlay)
-  (let ((buffer (current-buffer)))
-    (if (string-empty-p e--original-directive)
-        (e--delete-instruction e--directive-overlay)
-      (overlay-put e--directive-overlay 'e-directive e--original-directive)
-      (e--update-instruction-overlay e--directive-overlay nil))
-    (setq-local e--buffer-killable t)
-    (delete-window)
-    (kill-buffer buffer)
-    (unless no-error
-      (user-error "Aborted"))))
+(defun e--read-directive (directive)
+  "Prompt user to enter a directive text via minibuffer for DIRECTIVE."
+  (let ((original-directive-text (e--directive-text directive)))
+    (minibuffer-with-setup-hook
+        (lambda ()
+          (add-hook 'minibuffer-exit-hook
+                    (lambda ()
+                      (let ((directive-text (minibuffer-contents)))
+                        (if (string-empty-p directive-text)
+                            (if (string-empty-p original-directive-text)
+                                (e--delete-instruction directive)
+                              (overlay-put directive 'e-directive original-directive-text))
+                          (overlay-put directive 'e-directive directive-text))
+                        (e--update-instruction-overlay directive)))
+                    nil t)
+          (add-hook 'after-change-functions
+                    (lambda (_beg _end _len)
+                      (overlay-put directive 'e-directive (minibuffer-contents))
+                      (e--update-instruction-overlay directive nil))
+                    nil t))
+      (condition-case _err
+          (read-from-minibuffer "Directive: " original-directive-text)
+        (quit
+         (if (string-empty-p original-directive-text)
+             (e--delete-instruction directive)
+           (overlay-put directive 'e-directive original-directive-text)
+           (e--update-instruction-overlay directive nil))
+         (signal 'quit nil))))))
 
 (defun e--descriptive-llm-mode-role (mode)
   "Derive the descriptive major mode role name from the major MODE.
