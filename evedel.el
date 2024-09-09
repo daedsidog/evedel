@@ -70,6 +70,14 @@
   :type 'float
   :group 'evedel)
 
+(defcustom e-subinstruction-tint-intensity 0.5
+  "Coeffecient multiplied by by tint intensities.
+
+Only applicable to the subinstructions. Makes it possible to have more a
+more finely-tuned control over how tinting looks."
+  :type 'float
+  :group 'evedel)
+
 (defcustom e-empty-tag-query-matches-all t
   "Determines behavior of directives without a tag search query.
 
@@ -1297,10 +1305,18 @@ non-nil."
                      (if parent
                          (overlay-get parent 'e-bg-color)
                        (face-background 'default)))
+                    (label-tint-intensity
+                     (if parent
+                         (* e-subinstruction-tint-intensity e-instruction-label-tint-intensity)
+                       e-instruction-label-tint-intensity))
+                    (bg-tint-intensity
+                     (if parent
+                         (* e-subinstruction-tint-intensity e-instruction-bg-tint-intensity)
+                       e-instruction-bg-tint-intensity))
                     (label-color (e--tint parent-label-color
                                           color
-                                          e-instruction-label-tint-intensity))
-                    (bg-color (e--tint parent-bg-color color e-instruction-bg-tint-intensity)))
+                                          label-tint-intensity))
+                    (bg-color (e--tint parent-bg-color color bg-tint-intensity)))
                (overlay-put instruction 'e-bg-color bg-color)
                (overlay-put instruction 'e-label-color label-color)
                (overlay-put instruction 'priority priority)
