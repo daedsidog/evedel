@@ -60,7 +60,7 @@
   :type 'string
   :group 'evedel)
 
-(defcustom e-instruction-bg-tint-intensity 0.1
+(defcustom e-instruction-bg-tint-intensity 0.075
   "Default intensity for background tinting of instructions."
   :type 'float
   :group 'evedel)
@@ -499,6 +499,35 @@ Examples:
   (let ((directive (e--highest-priority-instruction (e--instructions-at (point) :directive))))
     (e--read-directive-tag-query directive)))
 
+(defun e-add-tags ()
+  "Add tags to the reference under the point."
+  (interactive)
+  (let* ((instructions (e--instructions-at (point) :reference))
+         (instr (e--highest-priority-instruction instructions)))
+    (if instr
+        (let* ((existing-tags (e--available-tags))
+               (input (completing-read-multiple "Add tags: " existing-tags nil nil))
+               (new-tags (mapcar 'intern input)))
+            (let ((added (e--add-tags instr new-tags)))
+              (message "%d tag%s added" added (if (= added 1) "" "s"))))
+      (user-error "No reference at point"))))
+
+(defun e-remove-tags ()
+  "Remove tags from the reference under the point."
+  (interactive)
+  (let* ((instructions (e--instructions-at (point) :reference))
+         (instr (e--highest-priority-instruction instructions)))
+    (if instr
+        (let ((tags-list (e--reference-tags instr)))
+          (if (null tags-list)
+              (user-error "Reference has no tags of its own to remove")
+            ;; Prompt the user to remove tags.
+            (let* ((input (completing-read-multiple "Remove tags: " tags-list nil t))
+                   (tags-to-remove (mapcar 'intern input)))
+              (let ((removed (e--remove-tags instr tags-to-remove)))
+                (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
+      (user-error "No reference at point"))))
+
 (defun e--read-directive-tag-query (directive)
   "Prompt user to enter a directive tag query text via minibuffer for DIRECTIVE."
   (let ((original-tag-query (overlay-get directive 'e-directive-infix-tag-query-string))
@@ -549,8 +578,10 @@ Examples:
                     nil t))
       (condition-case err
           (let ((tag-query (read-from-minibuffer "Directive tag query: "
-                                                 (substring-no-properties original-tag-query))))
-            (let ((parsed-prefix-tag-query (e--tag-query-prefix-from-infix tag-query)))
+                                                 (substring-no-properties
+                                                  (or original-tag-query "")))))
+            (let ((parsed-prefix-tag-query
+                   (e--tag-query-prefix-from-infix (read (concat "(" tag-query ")")))))
               (overlay-put directive 'e-directive-prefix-tag-query parsed-prefix-tag-query)
               (if (string-empty-p tag-query)
                   (overlay-put directive 'e-directive-infix-tag-query-string nil)
@@ -579,6 +610,26 @@ Examples:
              (if (eq direction :next) "next" "previous")
              type-string)))
 
+(cl-defun e--reference-matches-query-p (reference query)
+  "Returns t only if REFERENCES matches the tag QUERY."
+  (unless reference
+    (cl-return-from e--reference-matches-query-p nil))
+  (let ((atoms (cl-remove-duplicates (cl-remove-if (lambda (elm)
+                                                     (member elm '(not or and nil)))
+                                                   (flatten-tree query)))))
+    (if (and (null atoms) e-empty-tag-query-matches-all)
+        t
+      (let ((tags (e--reference-tags reference t)))
+        (if (and (null tags) e-always-match-untagged-references)
+            t
+          (let ((atom-bindings (mapcar (lambda (atom)
+                                         (if (member atom tags)
+                                             t
+                                           nil))
+                                       atoms)))
+            (cl-progv atoms atom-bindings
+              (eval query))))))))
+
 (defun e--filter-references (query)
   "Return a list of all references filtered by the tag QUERY.
 
@@ -590,16 +641,7 @@ See `evedel--tag-query-prefix-from-infix' for QUERY format."
         (e--foreach-instruction instr when (e--referencep instr) collect instr)
       (e--foreach-instruction instr
         when (and (e--referencep instr)
-                  (let ((tags (e--reference-tags instr)))
-                    (if (and (null tags) e-always-match-untagged-references)
-                        t
-                      (let ((atom-bindings (mapcar (lambda (atom)
-                                                     (if (member atom tags)
-                                                         t
-                                                       nil))
-                                                   atoms)))
-                        (cl-progv atoms atom-bindings
-                          (eval query))))))
+                  (e--reference-matches-query-p instr query))
         collect instr))))
 
 (defun e--tag-query-prefix-from-infix (query)
@@ -699,35 +741,6 @@ Signals an error when the query is malformed."
                     do (puthash tag t tags-hash))))
     (hash-table-keys tags-hash)))
 
-(defun e-add-tags ()
-  "Add tags to the reference under the point."
-  (interactive)
-  (let* ((instructions (e--instructions-at (point) :reference))
-         (instr (e--highest-priority-instruction instructions)))
-    (if instr
-        (let* ((existing-tags (e--available-tags))
-               (input (completing-read-multiple "Add tags: " existing-tags nil nil))
-               (new-tags (mapcar 'intern input)))
-            (let ((added (e--add-tags instr new-tags)))
-              (message "%d tag%s added" added (if (= added 1) "" "s"))))
-      (user-error "No reference at point"))))
-
-(defun e-remove-tags ()
-  "Remove tags from the reference under the point."
-  (interactive)
-  (let* ((instructions (e--instructions-at (point) :reference))
-         (instr (e--highest-priority-instruction instructions)))
-    (if instr
-        (let ((tags-list (e--reference-tags instr)))
-          (if (null tags-list)
-              (user-error "Reference has no tags of its own to remove")
-            ;; Prompt the user to remove tags.
-            (let* ((input (completing-read-multiple "Remove tags: " tags-list nil t))
-                   (tags-to-remove (mapcar 'intern input)))
-              (let ((removed (e--remove-tags instr tags-to-remove)))
-                (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
-      (user-error "No reference at point"))))
-
 (defun e--cycle-instruction (type direction)
   "Get the next or previous instruction overlay of TYPE.
 DIRECTION should be `:next' or `:previous' from the current point.
@@ -812,9 +825,15 @@ Returns the number of tags removed."
         (e--update-instruction-overlay reference t))
       removed)))
 
-(defun e--reference-tags (reference)
-  "Return the list of tags for the given REFERENCE."
-  (overlay-get reference 'e-reference-tags))
+(defun e--reference-tags (reference &optional include-parent-tags)
+  "Return the list of tags for the given REFERENCE.
+
+If INCLUDE-PARENT-TAG is non-nil, gets te parent's tags as well."
+  (if (not include-parent-tags)
+      (overlay-get reference 'e-reference-tags)
+    (append (overlay-get reference 'e-reference-tags)
+            (when-let ((parent (e--parent-instruction reference :reference)))
+              (e--reference-tags parent t)))))
 
 (defun e--delete-instruction-at (point)
   "Delete the instruction at POINT.
@@ -991,13 +1010,18 @@ Priority here refers to the priority property used by overlays."
   "Return non-nil if OVERLAY is an instruction overlay."
   (overlay-get overlay 'e-instruction))
 
-(defun e--parent-instruction (instruction)
-  "Return the parent of the given INSTRUCTION overlay."
+(defun e--parent-instruction (instruction &optional of-type)
+  "Return the parent of the given INSTRUCTION overlay.
+
+If OF-TYPE is non-nil, returns the parent with the given type."
   (with-current-buffer (overlay-buffer instruction)
     (let ((beg (overlay-start instruction))
           (end (overlay-end instruction)))
       (e--highest-priority-instruction (cl-remove-if-not (lambda (instr)
                                                            (and (not (eq instr instruction))
+                                                                (or (null of-type)
+                                                                    (eq (e--instruction-type instr)
+                                                                        of-type))
                                                                 (<= (overlay-start instr) beg
                                                                     end (overlay-end instr))))
                                                          (e--instructions-in beg end))))))
@@ -1228,8 +1252,7 @@ non-nil."
                                 (e--fill-label-string (overlay-get instruction
                                                                    'e-directive-fail-reason)
                                                       "FAILED: "
-                                                      (overlay-buffer instruction))
-                                "\n"))))
+                                                      (overlay-buffer instruction))))))
                 (setq color (directive-color instruction))
                 (let (sublabel)
                   (if (and parent
@@ -1242,13 +1265,13 @@ non-nil."
                       (setq sublabel (concat sublabel ": ")))
                     (setq label (concat
                                  label
-                                 (when label
+                                 (unless (string-empty-p label)
                                    (concat "\n" padding))
                                  (e--fill-label-string directive
                                                        sublabel
                                                        padding
                                                        (overlay-buffer instruction))))
-                    (unless parent
+                    (unless (e--parent-instruction instruction :directive)
                       (if-let ((query-string (overlay-get instruction
                                                           'e-directive-infix-tag-query-string)))
                           (setq label (concat
@@ -1417,26 +1440,31 @@ Does not return instructions that contain the region in its entirety."
   "Return a list of all currently loaded instructions."
   (e--foreach-instruction inst collect inst))
 
-(cl-defun e--topmost-instruction (instruction &optional of-type)
+(cl-defun e--topmost-instruction (instruction &optional of-type pred)
   "Return the topmost instruction containing the INSTRUCTION, if any.
 
 If OF-TYPE is non-nil, filter by the specified instruction OF-TYPE.
-If OF-TYPE is nil, the instruction returned is the top-level one."
+If OF-TYPE is nil, the instruction returned is the top-level one.
+
+If PRED is non-nil, then the best instruction must also satisfy it.
+The PRED must be a function which accepts an instruction."
   (unless instruction
     (cl-return-from e--topmost-instruction nil))
   (with-current-buffer (overlay-buffer instruction)
-    (let ((best-instruction (if of-type
-                                (when (eq (e--instruction-type instruction) of-type)
-                                  instruction)
-                              instruction)))
+    (let ((best-instruction instruction))
       (cl-labels ((parent-instr (instr)
                     (if-let ((parent (e--parent-instruction instr)))
                         (progn
-                          (when (and of-type (eq of-type (e--instruction-type parent)))
+                          (when (and (or (null of-type) (eq of-type (e--instruction-type parent)))
+                                     (or (null pred) (funcall pred parent)))
                             (setq best-instruction parent))
                           (parent-instr parent))
                       best-instruction)))
-        (parent-instr instruction)))))
+        (setq best-instruction (parent-instr instruction)))
+      (if (and (or (null of-type) (eq of-type (e--instruction-type best-instruction)))
+               (or (null pred) (funcall pred best-instruction)))
+          best-instruction
+        nil))))
 
 (defun e--recreate-instructions ()
   "Recreate all instructions.  Used for debugging purposes."
@@ -1593,9 +1621,13 @@ buffer, and the second being the content of the span itself."
 
 Returns the prompt as a string."
   (let* ((is-programmer (derived-mode-p 'prog-mode))
+         (query (overlay-get directive 'e-directive-prefix-tag-query))
+         (pred (lambda (instr)
+                 (e--reference-matches-query-p instr query)))
          (toplevel-references (e--foreach-instruction
                                   inst when (and (e--referencep inst)
-                                                 (eq (e--topmost-instruction inst :reference) inst)
+                                                 (eq (e--topmost-instruction inst :reference pred)
+                                                     inst)
                                                  ;; We do not wish to collect references that are
                                                  ;; contained within directives. It's redundant.
                                                  (not (e--subinstruction-of-p inst directive)))
