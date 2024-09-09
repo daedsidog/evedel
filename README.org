@@ -10,10 +10,13 @@ Evedel is versatile enough so that it can be utilized in various types of buffer
 
 ** Features
 
-- Simple to use
+[[file:media/complex-labeling-example.png]]
+
 - Uses [[https://github.com/karthink/gptel][GPTel]] as a backend, so no extra setup is necessary if you already use it.
-- Uses overlays for tracking instructions instead of raw text, which means that the instructions are not part of your file or buffer. The overlays are mostly intuitive and can be customized.
-- Has the ability to save your instruction overlays so you won't have to restart the instruction labeling process every time you start a new Emacs session.
+- Uses overlays for tracking instructions instead of raw text, which means that the instructions are not part of your file or buffer. The overlays are mostly intuitive and can be customized, and try not to interfere with the regular Emacs workflow.
+- Can save your instruction overlays so you won't have to restart the instruction labeling process every time you start a new Emacs session.
+- Can categorize your references with tags, and use complex query expressions to determine what to sent to the model in directives.
+- Can easily cycle through between instruction overlays across all buffers.
 
 ** Requirements
 :PROPERTIES:
@@ -21,7 +24,7 @@ Evedel is versatile enough so that it can be utilized in various types of buffer
 :END:
 
 - [[https://github.com/karthink/gptel][GPTel]]
-- Emacs version 28.1 or higher
+- Emacs version 29.1 or higher
 
 ** Usage
 
@@ -29,17 +32,18 @@ Evedel's function revolves around the creation and manipulation of references an
 
 [[file:media/basic-demo.gif]]
 
-*** Commands
+*** Creation, Modification, & Removal
 
-|---------------------------+-----------------------------------------------------------------------|
-| *Creation & Modification* | Command Description                                                   |
-|---------------------------+-----------------------------------------------------------------------|
-| =evedel-create-reference= | Create or resize a reference instruction within a region.             |
-| =evedel-create-directive= | Create or resize a directive instruction at point or within a region. |
-| =evedel-modify-directive= | Modify an existing directive instruction at point.                    |
-|---------------------------+-----------------------------------------------------------------------|
+|------------------------------+-----------------------------------------------------------------------|
+| Command                      | Command Description                                                   |
+|------------------------------+-----------------------------------------------------------------------|
+| =evedel-create-reference=    | Create or resize a reference instruction within a region.             |
+| =evedel-create-directive=    | Create or resize a directive instruction at point or within a region. |
+| =evedel-modify-directive=    | Modify an existing directive instruction at point.                    |
+| =evedel-delete-instructions= | Remove instructions either at point or within the selected region.    |
+| =evedel-delete-all=          | Delete all Evedel instructions across all buffers.                    |
+|------------------------------+-----------------------------------------------------------------------|
 
-Notes:
 - If the region mark started from outside the reference/directive overlay and a part of it is within the selected region, the instruction will be "shrunk" to fit the new region boundaries.
 - If the region mark started from inside the reference/directive overlay, the instruction will grow to include the entire new selection.
 
@@ -47,26 +51,32 @@ Below is an example of scaling existing instruction overlay (in this case, a ref
 
 [[file:media/scaling-demo.gif]]
 
-|-------------------------------+----------------------------------------------------------------------------|
-| *Processing & Management*     |                                                                            |
-|-------------------------------+----------------------------------------------------------------------------|
-| =evedel-save-instructions=    | Save current instruction overlays to a specified file.                     |
-| =evedel-load-instructions=    | Load instruction overlays from a specified file.                           |
-| =evedel-process-directives=   | Process directives by sending them to GPTel.                               |
-| =evedel-delete-instructions=  | Remove instructions either at point or within the selected region.         |
-| =evedel-delete-all=           | Delete all Evedel instructions across all buffers.                         |
-| =evedel-convert-instructions= | Convert between reference and directive types at point or within a region. |
-| =evedel-instruction-count=    | Return the number of instructions currently loaded.                        |
-|-------------------------------+----------------------------------------------------------------------------|
+*** Management
 
-Notes:
+|-----------------------------------+---------------------------------------------------------|
+| Command                           | Command Description                                     |
+|-----------------------------------+---------------------------------------------------------|
+| =evedel-save-instructions=        | Save current instruction overlays to a specified file.  |
+| =evedel-load-instructions=        | Load instruction overlays from a specified file.        |
+| =evedel-process-directives=       | Process directives by sending them to GPTel.            |
+| =evedel-convert-instructions=     | Convert between reference and directive types at point. |
+| =evedel-instruction-count=        | Return the number of instructions currently loaded.     |
+| =evedel-preview-directive-prompt= | Preview directive prompt at the current point.          |
+|-----------------------------------+---------------------------------------------------------|
+
+Here's an example of previewing a directive prompt:
+
+[[file:media/preview-directive-demo.gif]]
+
 - For =evedel-process-directives=:
   - If at point: sends the directive under the point.
   - If a region is selected: sends all directives within the selected region.
   - Otherwise, processes all directives in the current buffer.
 
+*** Navigation
+
 |-------------------------------+-------------------------------------------------------|
-| *Navigation*                  | Command Description                                   |
+| Command                       | Command Description                                   |
 |-------------------------------+-------------------------------------------------------|
 | =evedel-next-instruction=     | Cycle through instructions in the forward direction.  |
 | =evedel-previous-instruction= | Cycle through instructions in the backward direction. |
@@ -76,22 +86,50 @@ Notes:
 | =evedel-previous-directive=   | Cycle through directives in the backward direction.   |
 |-------------------------------+-------------------------------------------------------|
 
+*** Categorization
 
+|-------------------------------------+-------------------------------------------------------------------|
+| Command                             | Description                                                       |
+|-------------------------------------+-------------------------------------------------------------------|
+| =evedel-add-tags=                   | Add tags to the reference under the point.                        |
+| =evedel-remove-tags=                | Remove tags from the reference under the point.                   |
+| =evedel-modify-directive-tag-query= | Enter a tag search query for a directive under the current point. |
+|-------------------------------------+-------------------------------------------------------------------|
+
+[[file:media/tag-query-demo.gif]]
+
+The categorization system in allows you to use tags to label and organize references. You can add or remove tags to a reference using the commands =evedel-add-tags= and =evedel-remove-tags=. Each tag is a symbolic label that helps identify the nature or purpose of the reference.
+
+You can also modify the tag query for a directive, which is a way to filter and search for references by tags. The tag query uses an infix notation system, allowing complex expressions with the operators =and=, =or=, and =not=. For example, the query =signature and function and doc= means the directive should match references tagged with =signature=, =function=, and =doc=. You may use parentheses in these expressions.
+
+|-------------------------------------------+------------------------------------------------------|
+| Custom Variable                           | Description                                          |
+|-------------------------------------------+------------------------------------------------------|
+| =evedel-empty-tag-query-matches-all=      | Determines matching behavior of queryless directives |
+| =evedel-always-match-untagged-references= | Determines matching behavior of untagged references  |
+|-------------------------------------------+------------------------------------------------------|
+
+- =evedel-empty-tag-query-matches-all=: This custom variable determines the behavior of directives without a tag search query. If set to =t=, directives lacking a specific tag search query will use all available references. Alternatively, if set to =nil=, such directives will not use any references, leading to potentially narrower results.
+
+- =evedel-always-match-untagged-references=: This custom variable controls the inclusion of untagged references in directive prompts. When set to =t=, untagged references are always incorporated into directive references, ensuring comprehensive coverage. Conversely, when set to =nil=, untagged references are ignored unless =evedel-empty-tag-query-matches-all= is set to =t=.
 
 *** Customization
 
-|-------------------------------------------+--------------------------------------------------|
-| *Custom Variables*                        | Description                                      |
-|-------------------------------------------+--------------------------------------------------|
-| =evedel-reference-color=                  | Tint color for reference overlays                |
-| =evedel-directive-color=                  | Tint color for directive overlays                |
-| =evedel-directive-processing-color=       | Tint color for directives being processed        |
-| =evedel-directive-success-color=          | Tint color for successfully processed directives |
-| =evedel-directive-fail-color=             | Tint color for failed directives                 |
-| =evedel-instruction-bg-tint-intensity=    | Intensity for instruction background tint        |
-| =evedel-instruction-label-tint-intensity= | Intensity for instruction label tint             |
-| =evedel-descriptive-mode-roles=           | Major modes to model roles association list      |
-|-------------------------------------------+--------------------------------------------------|
+|-------------------------------------------+---------------------------------------------------|
+| Custom Variable                           | Description                                       |
+|-------------------------------------------+---------------------------------------------------|
+| =evedel-reference-color=                  | Tint color for reference overlays                 |
+| =evedel-directive-color=                  | Tint color for directive overlays                 |
+| =evedel-directive-processing-color=       | Tint color for directives being processed         |
+| =evedel-directive-success-color=          | Tint color for successfully processed directives  |
+| =evedel-directive-fail-color=             | Tint color for failed directives                  |
+| =evedel-instruction-bg-tint-intensity=    | Intensity for instruction background tint         |
+| =evedel-instruction-label-tint-intensity= | Intensity for instruction label tint              |
+| =evedel-subinstruction-tint-intensity=    | Coefficient for adjusting subinstruction tints    |
+| =evedel-descriptive-mode-roles=           | Major modes to model roles association list       |
+|-------------------------------------------+---------------------------------------------------|
+
+Please refer to the custom variable documentation within the package for a more comprehensive description.
 
 *** Instruction Persistence
 
@@ -112,12 +150,13 @@ Add the path to the cloned repository in your Emacs configuration. You can do th
 
 #+begin_src emacs-lisp
 (add-to-list 'load-path "/path/to/evedel")
-#+end_src
 
 Use =use-package= to configure Evedel as shown in the snippet below:
 
 #+begin_src emacs-lisp
 (use-package evedel
+  :config
+  (customize-set-variable 'evedel-empty-tag-query-matches-all nil)
   :bind (("C-c e r" . evedel-create-reference)
          ("C-c e d" . evedel-create-directive)
          ("C-c e s" . evedel-save-instructions)
@@ -125,24 +164,40 @@ Use =use-package= to configure Evedel as shown in the snippet below:
          ("C-c e p" . evedel-process-directives)
          ("C-c e m" . evedel-modify-directive)
          ("C-c e k" . evedel-delete-instructions)
-         ("C-c e c" . evedel-convert-instructions)))
+         ("C-c e c" . evedel-convert-instructions)
+         ("C->"     . evedel-next-instruction)
+         ("C-<"     . evedel-previous-instruction)
+         ("C-c e t" . evedel-add-tags)
+         ("C-c e T" . evedel-remove-tags)
+         ("C-c e D" . evedel-modify-directive-tag-query)
+         ("C-c e P" . evedel-preview-directive-prompt)))
 #+end_src
    
 Make sure to replace ="/path/to/evedel"= with the actual path where you cloned the Evedel repository.
   
 ** Planned Features
 
-- +Instruction navigation+
-- Reference categorization
-- More advanced auto-saving/loading. For now, you can consult the [[file:.dir-locals.el]] file that I use for the project to see how I handle automatic saving/loading of instructions for it.
-- LLM request logging
-- Diff facilities
-- Better overlay tracking on changes
-- Instruction undoing/history
-- Advanced directive processing
+- [ ] Instruction navigation
+  - *[X] Basic cyclic navigation between instruction across buffers*
+  - [ ] Reference navigation based on a tag query
+- [ ] Categorization
+  - *[X] Reference tags*
+  - *[X] Filter references via tag query when sending directives*
+  - [ ] Tag autocompletion when writing directive tag query
+- [ ] Interface
+  - [ ] Auto-saving/loading. For now, you can consult the [[file:.dir-locals.el]] file that I use for the project to see how I handle automatic saving/loading of instructions for it.
+  - [ ] Persistence with version controls, e.g. switching branches should not mess up the instructions.
+  - [ ] Preservation of sub-instructions returned as part of a successful directive
+  - [ ] Instruction undoing/redoing history
+- [ ] Documentation
+  - *[X] Ability to preview directive to be sent*
+  - [ ] Instruction help tool-tips
+- [ ] Directive tools
+  - [ ] Sequential execution of dependent directives
+  - [ ] Interactive directive result diff, i.e. being able to tell the model what to correct.
 
 ** Acknowledgments
 
 - Special thanks to [[https://github.com/karthink][Karthik Chikmagalur]] for the excellent [[https://github.com/karthink/gptel][GPTel]] package
 
-#  LocalWords:  LLM Evedel DWIM Evedel's GPTel evedel backend
+#  LocalWords:  LLM Evedel DWIM Evedel's GPTel evedel backend untagged autocomplete autocompletion
