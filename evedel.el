@@ -70,7 +70,7 @@
   :type 'float
   :group 'evedel)
 
-(defcustom e-empty-tag-query-references-all t
+(defcustom e-empty-tag-query-matches-all t
   "Determines behavior of directives without a tag search query.
 
 If set to t, directives without a specific tag search query will use all
@@ -79,13 +79,13 @@ a search query will not use any references."
   :type 'boolean
   :group 'evedel)
 
-(defcustom e-always-include-untagged-references t
+(defcustom e-always-match-untagged-references t
   "Controls inclusion of untagged references in directive prompts.
 
 When set to t, untagged references are always incorporated into directive
 references, ensuring comprehensive coverage.  Conversely, when set to nil,
-untagged references are ignored, streamlining the directive references to only
-include tagged items."
+untagged references are ignored, unless `evedel-empty-tag-query-matches-all'
+is set to t."
   :type 'boolean
   :group 'evedel)
 
@@ -455,27 +455,120 @@ will throw a user error."
   (unless (e--cycle-instruction :directive :previous)
     (e--print-instruction-not-found :previous :directive)))
 
-;; (defun e-add-directive-tag-query (query)
-;;   "Prompt the minibuffer to enter a tag search query for a directive.
+(defun e-preview-directive-prompt ()
+  "Preview directive prompt at the current point.
 
-;; The directive in question is either the directive under the curent point in the
-;; buffer or the directive for which the prompt is currently being written for.
+This command is useful to see what is actually being sent to the model."
+  (interactive)
+  (let ((directive (e--topmost-instruction (car (e--instructions-at (point) :directive))
+                                           :directive)))
+    (let ((request-string (e--directive-llm-prompt directive)))
+      (let ((bufname "*evedel-directive-preview*"))
+        (with-output-to-temp-buffer bufname
+          (princ (format "<!-- SYSTEM: %s -->"
+                         (replace-regexp-in-string "\n"
+                                                   "\n# "
+                                                   (e--directive-llm-system-message directive))))
+          (princ "\n\n")
+          (princ request-string)
+          (with-current-buffer bufname
+            (markdown-mode)
+            (read-only-mode 1)
+            (visual-line-mode 1)
+            (display-line-numbers-mode 1)
+            (let ((local-map (make-sparse-keymap)))
+              (set-keymap-parent local-map (current-local-map))
+              (define-key local-map (kbd "q") 'quit-window)
+              (use-local-map local-map))))))))
 
-;; A tag query is an infix expression, containing symbol atoms and the operator
-;; symbols: AND, OR, NOT.  If no operator is present between two expressions, then
-;; an implicit AND operator is assumed.
+(defun e-modify-directive-tag-query ()
+  "Prompt minibuffer to enter a tag search query for a directive.
 
-;; Examples:
-;;   (signature and function and doc)
-;;   (not dog or not cat)
-;;   (cat or dog or (sheep and black))
-;;   ((cat and dog) or (dog and goose))")
-;;   (interactive)
-;;   (let ((directive (e--get-current-directive)))
-;;     (let ((prefix-query (e--tag-query-prefix-from-infix query)))
-;;       ;; Assuming `apply-tag-query-to-directive` is defined elsewhere.
-;;       (apply-tag-query-to-directive directive prefix-query)))
-  
+The directive in question is either the directive under the curent point.
+
+A tag query is an _infix_ expression, containing symbol atoms and the operator
+symbols: `and', `or', `not'.  If no operator is present between two expressions,
+then an implicit `and' operator is assumed.
+
+Examples:
+  (signature and function and doc)
+  (not dog or not cat)
+  (cat or dog or (sheep and black))
+  ((cat and dog) or (dog and goose))"
+  (interactive)
+  (let ((directive (e--highest-priority-instruction (e--instructions-at (point) :directive))))
+    (e--read-directive-tag-query directive)))
+
+(defun e--read-directive-tag-query (directive)
+  "Prompt user to enter a directive tag query text via minibuffer for DIRECTIVE."
+  (let ((original-tag-query (overlay-get directive 'e-directive-infix-tag-query-string))
+        (timer nil)
+        (minibuffer-message))
+    (minibuffer-with-setup-hook
+        (lambda ()
+          (add-hook 'minibuffer-exit-hook
+                    (lambda ()
+                      (when timer
+                        (cancel-timer timer)))
+                    nil t)
+          (add-hook 'after-change-functions
+                    (lambda (_beg _end _len)
+                      (when timer
+                        (cancel-timer timer))
+                      (setq timer
+                            (run-with-timer
+                             0.5
+                             nil
+                             (lambda ()
+                               (condition-case err
+                                   (let ((query (read (concat "("
+                                                              (minibuffer-contents)
+                                                              ")"))))
+                                     (let ((refs (e--filter-references
+                                                  (e--tag-query-prefix-from-infix query)))
+                                           (total-count 0)
+                                           (buffer-count 0))
+                                       (cl-loop with bufhash = (make-hash-table)
+                                                for ref in refs
+                                                do (progn
+                                                     (cl-incf total-count)
+                                                     (puthash (overlay-buffer ref) t bufhash))
+                                                finally (setq buffer-count
+                                                              (hash-table-count bufhash)))
+                                       (setq minibuffer-message
+                                             (format "%d hit%s in %d buffer%s"
+                                                     total-count
+                                                     (if (= total-count 1) "" "s")
+                                                     buffer-count
+                                                     (if (= buffer-count 1) "" "s")))))
+                                 (error
+                                  (setq minibuffer-message
+                                        (error-message-string err))))
+                               (when minibuffer-message
+                                 (set-minibuffer-message minibuffer-message))))))
+                    nil t))
+      (condition-case err
+          (let ((tag-query (read-from-minibuffer "Directive tag query: "
+                                                 (substring-no-properties original-tag-query))))
+            (let ((parsed-prefix-tag-query (e--tag-query-prefix-from-infix tag-query)))
+              (overlay-put directive 'e-directive-prefix-tag-query parsed-prefix-tag-query)
+              (if (string-empty-p tag-query)
+                  (overlay-put directive 'e-directive-infix-tag-query-string nil)
+                (overlay-put directive
+                             'e-directive-infix-tag-query-string
+                             ;; Since Emacs doesn't have negative-lookaheads, we have to make due
+                             ;; by first applying the face we want the symbols to be, and then
+                             ;; applying the default face on everything we don't want to match.
+                             (e--apply-face-to-match "\\b\\(?:(*not\\|or\\|and\\)\\b\\|(\\|)"
+                                                     (e--apply-face-to-match
+                                                      "\\(:?.+\\)"
+                                                      tag-query
+                                                      'font-lock-constant-face)
+                                                     nil))))
+            (e--update-instruction-overlay directive t))
+        (error 
+         (message (error-message-string err)))))))
+            
 (defun e--print-instruction-not-found (direction type)
   "Print a not found message for the given DIRECTION and TYPE."
   (let ((type-string (pcase type
@@ -485,6 +578,29 @@ will throw a user error."
     (message "No %s %s found"
              (if (eq direction :next) "next" "previous")
              type-string)))
+
+(defun e--filter-references (query)
+  "Return a list of all references filtered by the tag QUERY.
+
+See `evedel--tag-query-prefix-from-infix' for QUERY format."
+  (let ((atoms (cl-remove-duplicates (cl-remove-if (lambda (elm)
+                                                     (member elm '(not or and nil)))
+                                                   (flatten-tree query)))))
+    (if (and (null atoms) e-empty-tag-query-matches-all)
+        (e--foreach-instruction instr when (e--referencep instr) collect instr)
+      (e--foreach-instruction instr
+        when (and (e--referencep instr)
+                  (let ((tags (e--reference-tags instr)))
+                    (if (and (null tags) e-always-match-untagged-references)
+                        t
+                      (let ((atom-bindings (mapcar (lambda (atom)
+                                                     (if (member atom tags)
+                                                         t
+                                                       nil))
+                                                   atoms)))
+                        (cl-progv atoms atom-bindings
+                          (eval query))))))
+        collect instr))))
 
 (defun e--tag-query-prefix-from-infix (query)
   "Transform the tag QUERY to prefix notation for Lisp.
@@ -1039,6 +1155,19 @@ words as a last resort if a word is too long to fit on a line by itself."
        (= (overlay-start a) (overlay-start b))
        (= (overlay-end a) (overlay-end b))))
 
+(defun e--apply-face-to-match (regex string face)
+  "Apply FACE as a text property to the REGEX match in STRING.
+
+If FACE is nil, removes the face property from the REGEX match in STRING."
+  (with-temp-buffer
+    (insert string)
+    (goto-char (point-min))
+    (while (re-search-forward regex nil t)
+      (if face
+          (add-text-properties (match-beginning 0) (match-end 0) `(face ,face))
+        (remove-text-properties (match-beginning 0) (match-end 0) '(face nil))))
+    (buffer-string)))
+
 (defun e--update-instruction-overlay (instruction &optional update-children)
   "Update the appearance of the INSTRUCTION overlay.
 
@@ -1092,8 +1221,8 @@ non-nil."
                                                                  'e-directive-status))
                   (setq topmost-directive instruction))
                 (pcase (overlay-get instruction 'e-directive-status)
-                  (:processing (setq label "PROCESSING\n"))
-                  (:succeeded (setq label "SUCCEEDED\n"))
+                  (:processing (setq label "PROCESSING"))
+                  (:succeeded (setq label "SUCCEEDED"))
                   (:failed
                    (setq label (concat
                                 (e--fill-label-string (overlay-get instruction
@@ -1113,10 +1242,30 @@ non-nil."
                       (setq sublabel (concat sublabel ": ")))
                     (setq label (concat
                                  label
+                                 (when label
+                                   (concat "\n" padding))
                                  (e--fill-label-string directive
                                                        sublabel
                                                        padding
-                                                       (overlay-buffer instruction))))))))
+                                                       (overlay-buffer instruction))))
+                    (unless parent
+                      (if-let ((query-string (overlay-get instruction
+                                                          'e-directive-infix-tag-query-string)))
+                          (setq label (concat
+                                       label
+                                       "\n"
+                                       padding
+                                       (e--fill-label-string query-string
+                                                             "TAG QUERY: "
+                                                             padding
+                                                             (overlay-buffer instruction))))
+                        (let (matchinfo)
+                          (if e-empty-tag-query-matches-all
+                              (setq matchinfo "REFERENCES ALL")
+                            (if e-always-match-untagged-references
+                                (setq matchinfo "REFERENCES UNTAGGED ONLY")
+                              (setq matchinfo "REFERENCES NOTHING")))
+                          (setq label (concat label "\n" padding matchinfo)))))))))
              (let* ((parent-label-color
                      (if parent
                          (overlay-get parent 'e-label-color)
@@ -1346,6 +1495,7 @@ If OF-TYPE is nil, the instruction returned is the top-level one."
            (e--update-instruction-overlay directive nil))
          (signal 'quit nil))))))
 
+
 (defun e--descriptive-llm-mode-role (mode)
   "Derive the descriptive major mode role name from the major MODE.
 
@@ -1374,30 +1524,6 @@ Returns the message as a string."
       (setq backticks (concat backticks "`")))
     backticks))
 
-(defun e--preview-directive-llm-prompt-at-point ()
-  "Preview directive prompt at the current point.  Useful for debugging."
-  (interactive)
-  (let ((directive (e--topmost-instruction (car (e--instructions-at (point) :directive))
-                                           :directive)))
-    (let ((request-string (e--directive-llm-prompt directive)))
-      (let ((bufname "*evedel-directive-preview*"))
-        (with-output-to-temp-buffer bufname
-          (princ (format "<!-- SYSTEM: %s -->"
-                         (replace-regexp-in-string "\n"
-                                                   "\n# "
-                                                   (e--directive-llm-system-message directive))))
-          (princ "\n\n")
-          (princ request-string)
-          (with-current-buffer bufname
-            (markdown-mode)
-            (read-only-mode 1)
-            (visual-line-mode 1)
-            (display-line-numbers-mode 1)
-            (let ((local-map (make-sparse-keymap)))
-              (set-keymap-parent local-map (current-local-map))
-              (define-key local-map (kbd "q") 'quit-window)
-              (use-local-map local-map))))))))
-    
 (defun e--overlay-region-info (overlay)
   "Return region span information of OVERLAY in its buffer.
 
@@ -1625,8 +1751,9 @@ discrepancy."
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
 (provide 'evedel)
-;;; evedel.el ends here.
 
 ;; Local Variables:
 ;; read-symbol-shorthands: (("e-" . "evedel-"));
 ;; End:
+
+;;; evedel.el ends here.
