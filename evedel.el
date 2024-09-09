@@ -3,7 +3,7 @@
 ;; Copyright (C) 2024  daedsidog
 
 ;; Author: daedsidog <contact@daedsidog.com>
-;; Version: 0.0.1
+;; Version: 0.2.4
 ;; Keywords: convenience, tools
 ;; Package-Requires: ((emacs "29.1") (gptel "0.9.0"))
 ;; URL: https://github.com/daedsidog/evedel
@@ -1295,7 +1295,7 @@ non-nil."
                                                        sublabel
                                                        padding
                                                        (overlay-buffer instruction))))
-                    (unless parent
+                    (unless (e--parent-instruction instruction :directive)
                       (if-let ((query-string (overlay-get instruction
                                                           'e-directive-infix-tag-query-string)))
                           (setq label (concat
