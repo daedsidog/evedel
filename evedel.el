@@ -70,7 +70,7 @@
   :type 'float
   :group 'evedel)
 
-(defcustom e-empty-tag-query-references-all t
+(defcustom e-empty-tag-query-matches-all t
   "Determines behavior of directives without a tag search query.
 
 If set to t, directives without a specific tag search query will use all
@@ -79,7 +79,7 @@ a search query will not use any references."
   :type 'boolean
   :group 'evedel)
 
-(defcustom e-always-include-untagged-references t
+(defcustom e-always-match-untagged-references t
   "Controls inclusion of untagged references in directive prompts.
 
 When set to t, untagged references are always incorporated into directive
@@ -471,27 +471,78 @@ will throw a user error."
   (unless (e--cycle-instruction :directive :previous)
     (e--print-instruction-not-found :previous :directive)))
 
-;; (defun e-add-directive-tag-query (query)
-;;   "Prompt the minibuffer to enter a tag search query for a directive.
+(defun e-modify-directive-tag-query ()
+  "Prompt minibuffer to enter a tag search query for a directive.
 
-;; The directive in question is either the directive under the curent point in the
-;; buffer or the directive for which the prompt is currently being written for.
+The directive in question is either the directive under the curent point.
 
-;; A tag query is an infix expression, containing symbol atoms and the operator
-;; symbols: AND, OR, NOT.  If no operator is present between two expressions, then
-;; an implicit AND operator is assumed.
+A tag query is an _infix_ expression, containing symbol atoms and the operator
+symbols: `and', `or', `not'.  If no operator is present between two expressions,
+then an implicit `and' operator is assumed.
 
-;; Examples:
-;;   (signature and function and doc)
-;;   (not dog or not cat)
-;;   (cat or dog or (sheep and black))
-;;   ((cat and dog) or (dog and goose))")
-;;   (interactive)
-;;   (let ((directive (e--get-current-directive)))
-;;     (let ((prefix-query (e--tag-query-prefix-from-infix query)))
-;;       ;; Assuming `apply-tag-query-to-directive` is defined elsewhere.
-;;       (apply-tag-query-to-directive directive prefix-query)))
-  
+Examples:
+  (signature and function and doc)
+  (not dog or not cat)
+  (cat or dog or (sheep and black))
+  ((cat and dog) or (dog and goose))"
+  (interactive)
+  (let ((directive (e--highest-priority-instruction (e--instructions-at (point) :directive))))
+    (e--read-directive-tag-query directive)))
+
+(defun e--read-directive-tag-query (directive)
+  "Prompt user to enter a directive tag query text via minibuffer for DIRECTIVE."
+  (let ((original-tag-query (overlay-get directive 'e-directive-tag-query))
+        (timer nil)
+        (minibuffer-message))
+    (minibuffer-with-setup-hook
+        (lambda ()
+          (add-hook 'minibuffer-exit-hook
+                    (lambda ()
+                      (when timer
+                        (cancel-timer timer)))
+                    nil t)
+          (add-hook 'after-change-functions
+                    (lambda (_beg _end _len)
+                      (when timer
+                        (cancel-timer timer))
+                      (setq timer
+                            (run-with-timer
+                             0.5
+                             nil
+                             (lambda ()
+                               (condition-case err
+                                   (let ((query (read (concat "("
+                                                              (minibuffer-contents)
+                                                              ")"))))
+                                     (let ((refs (e--filter-references
+                                                  (e--tag-query-prefix-from-infix query)))
+                                           (total-count 0)
+                                           (buffer-count 0))
+                                       (cl-loop with bufhash = (make-hash-table)
+                                                for ref in refs
+                                                do (progn
+                                                     (cl-incf total-count)
+                                                     (puthash (overlay-buffer ref) t bufhash))
+                                                finally (setq buffer-count
+                                                              (hash-table-count bufhash)))
+                                       (setq minibuffer-message
+                                             (format "%d hit%s in %d buffer%s"
+                                                     total-count
+                                                     (if (= total-count 1) "" "s")
+                                                     buffer-count
+                                                     (if (= buffer-count 1) "" "s")))))
+                                 (error
+                                  (setq minibuffer-message
+                                        (error-message-string err))))
+                               (when minibuffer-message
+                                 (set-minibuffer-message minibuffer-message))))))
+                    nil t))
+      (condition-case err
+          (let ((tag-query (read-minibuffer "Directive tag query: " original-tag-query)))
+            (overlay-put directive 'e-directive-tag-query tag-query))
+        (error 
+         (message (error-message-string err)))))))
+            
 (defun e--print-instruction-not-found (direction type)
   "Print a not found message for the given DIRECTION and TYPE."
   (let ((type-string (pcase type
@@ -501,6 +552,29 @@ will throw a user error."
     (message "No %s %s found"
              (if (eq direction :next) "next" "previous")
              type-string)))
+
+(defun e--filter-references (query)
+  "Return a list of all references filtered by the tag QUERY.
+
+See `evedel--tag-query-prefix-from-infix' for QUERY format."
+  (let ((atoms (cl-remove-duplicates (cl-remove-if (lambda (elm)
+                                                     (member elm '(not or and nil)))
+                                                   (flatten-tree query)))))
+    (if (and (null atoms) e-empty-tag-query-matches-all)
+        (e--foreach-instruction instr when (e--referencep instr) collect instr)
+      (e--foreach-instruction instr
+        when (and (e--referencep instr)
+                  (let ((tags (e--reference-tags instr)))
+                    (if (and (null tags) e-always-match-untagged-references)
+                        t
+                      (let ((atom-bindings (mapcar (lambda (atom)
+                                                     (if (member atom tags)
+                                                         t
+                                                       nil))
+                                                   atoms)))
+                        (cl-progv atoms atom-bindings
+                          (eval query))))))
+        collect instr))))
 
 (defun e--tag-query-prefix-from-infix (query)
   "Transform the tag QUERY to prefix notation for Lisp.
@@ -1361,6 +1435,7 @@ If OF-TYPE is nil, the instruction returned is the top-level one."
            (overlay-put directive 'e-directive original-directive-text)
            (e--update-instruction-overlay directive nil))
          (signal 'quit nil))))))
+
 
 (defun e--descriptive-llm-mode-role (mode)
   "Derive the descriptive major mode role name from the major MODE.
