@@ -230,22 +230,6 @@ If called interactively, it messages the number of instructions and buffers."
       count)))
 
 ;;;###autoload
-(defun e-current-save-file ()
-  "Return the current save file path.
-
-When called interactively, the result is messaged back.  Otherwise, the path
-of the currently used save file is returned as a string."
-  (interactive)
-  (if e--current-save-file
-      (if (called-interactively-p 'any)
-          (message "Current save file: %s" e--current-save-file)
-        e--current-save-file)
-    (let ((nil-message "No save file is currently set."))
-      (if (called-interactively-p 'any)
-          (message "%s" nil-message)
-        nil-message))))
-
-;;;###autoload
 (defun e-create-reference ()
   "Create a reference instruction within the selected region.
 

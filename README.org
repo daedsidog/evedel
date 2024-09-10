@@ -135,7 +135,7 @@ Please refer to the custom variable documentation within the package for a more 
 
 If you have added instructions to your files and saved them, make sure to load them before resuming work on your project. Failing to do so, and loading them after making changes to your files, will lead to mismatched instruction overlays.
 
-To alleviate this until something more established is added, you could consult the project's [[file:.dir-locals.el]] to see how auto-saving/loading is done in the project.
+Frequently save your instructions, and keep a version of instructions for every branch. Something not brittle is planned to alleviate this in the future.
 
 ** Setup
 
@@ -177,25 +177,38 @@ Make sure to replace ="/path/to/evedel"= with the actual path where you cloned t
   
 ** Planned Features
 
-- [ ] Instruction navigation
-  - *[X] Basic cyclic navigation between instruction across buffers*
-  - [ ] Reference navigation based on a tag query
-- [ ] Categorization
-  - *[X] Reference tags*
-  - *[X] Filter references via tag query when sending directives*
-  - [ ] Tag autocompletion when writing directive tag query
-- [ ] Interface
-  - [ ] Auto-saving/loading. For now, you can consult the [[file:.dir-locals.el]] file that I use for the project to see how I handle automatic saving/loading of instructions for it.
-  - [ ] Persistence with version controls, e.g. switching branches should not mess up the instructions.
-  - [ ] Preservation of sub-instructions returned as part of a successful directive
-  - [ ] Instruction undoing/redoing history
-  - [ ] Better/more precise instruction selection resolution for tightly nested instructions
-- [ ] Documentation
-  - *[X] Ability to preview directive to be sent*
-  - [ ] Instruction help tool-tips
-- [ ] Directive tools
-  - [ ] Sequential execution of dependent directives
-  - [ ] Interactive directive result diff, i.e. being able to tell the model what to correct.
+Mark indicates previously planned features that have been implemented.
+
+*** Instruction Navigation
+
+- *[X] Basic cyclic navigation between instruction across buffers*
+- [ ] Reference navigation based on a tag query
+  
+*** Reference Management
+
+- *[X] Reference categorization via tags*
+- *[X] Filter references via tag query when sending directives*
+- [ ] Tag autocompletion when writing directive tag query
+- [ ] Windows references: describe to the model the contents of a particular Emacs window.
+- [ ] Whole-Emacs references: describe to the model the entire status of the Emacs session.
+
+*** Directive Management
+
+- [ ] Sequential execution of dependent directives
+- [ ] Interactive directive result diff, i.e. being able to tell the model what to correct.
+  
+*** Interface
+
+- [ ] Auto-saving/loading
+- [ ] Persistence with version controls, e.g. switching branches should not mess up the instructions.
+- [ ] Preservation of sub-instructions returned as part of a successful directive
+- [ ] Instruction undoing/redoing history
+- [ ] Better/more precise instruction selection resolution for tightly nested instructions
+
+*** Documentation
+  
+- *[X] Ability to preview directive to be sent*
+- [ ] Instruction help tool-tips
 
 ** Acknowledgments
 
