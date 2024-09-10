@@ -189,6 +189,7 @@ Make sure to replace ="/path/to/evedel"= with the actual path where you cloned t
   - [ ] Persistence with version controls, e.g. switching branches should not mess up the instructions.
   - [ ] Preservation of sub-instructions returned as part of a successful directive
   - [ ] Instruction undoing/redoing history
+  - [ ] Better/more precise instruction selection resolution for tightly nested instructions
 - [ ] Documentation
   - *[X] Ability to preview directive to be sent*
   - [ ] Instruction help tool-tips
