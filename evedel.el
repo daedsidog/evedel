@@ -1203,9 +1203,10 @@ If FACE is nil, removes the face property from the REGEX match in STRING."
 (defun e--instruction-bufferlevel-p (instruction)
   "Return t if INSTRUCTION contains the entirety of its buffer."
   (let ((buffer (overlay-buffer instruction)))
-    (and buffer
-         (= (overlay-start instruction) (point-min))
-         (= (overlay-end instruction) (point-max)))))
+    (when buffer
+      (with-current-buffer buffer
+        (and (= (overlay-start instruction) (point-min))
+             (= (overlay-end instruction) (point-max)))))))
 
 (defun e--update-instruction-overlay (instruction &optional update-children)
   "Update the appearance of the INSTRUCTION overlay.
@@ -1311,11 +1312,13 @@ non-nil."
              (let* ((default-fg (face-foreground 'default))
                     (default-bg (face-background 'default))
                     (parent-label-color
-                     (if parent (overlay-get parent 'e-label-color) default-fg))
+                     (if (and parent (not parent-bufferlevel))
+                         (overlay-get parent 'e-label-color)
+                       default-fg))
                     (parent-bg-color
                      (if parent (overlay-get parent 'e-bg-color) default-bg))
                     (label-tint-intensity
-                     (if parent
+                     (if (and parent (not parent-bufferlevel))
                          (* e-subinstruction-tint-intensity e-instruction-label-tint-intensity)
                        e-instruction-label-tint-intensity))
                     (bg-tint-intensity
@@ -1539,7 +1542,7 @@ The PRED must be a function which accepts an instruction."
           (add-hook 'after-change-functions
                     (lambda (_beg _end _len)
                       (overlay-put directive 'e-directive (minibuffer-contents))
-                      (e--update-instruction-overlay directive nil))
+                      (e--update-instruction-overlay directive))
                     nil t))
       (condition-case _err
           (read-from-minibuffer "Directive: " original-directive-text)
