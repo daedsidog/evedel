@@ -1252,7 +1252,8 @@ non-nil."
                   (if is-bufferlevel
                       (setq label "BUFFER REFERENCE")
                     (setq label "REFERENCE")))
-                (when-let ((tags (e--reference-tags instruction)))
+                (when-let ((tags (sort (e--reference-tags instruction)
+                                       #'string-lessp)))
                   (setq label (concat
                                label
                                "\n"
