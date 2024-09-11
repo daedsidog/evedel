@@ -60,7 +60,7 @@
   :type 'string
   :group 'evedel)
 
-(defcustom e-instruction-bg-tint-intensity 0.1
+(defcustom e-instruction-bg-tint-intensity 0.075
   "Default intensity for background tinting of instructions."
   :type 'float
   :group 'evedel)
@@ -328,7 +328,7 @@ Throw a user error if no instructions to delete were found."
     (if (use-region-p)
         (let ((start (region-beginning))
               (end (region-end)))
-          (dolist (overlay (overlays-in start end))
+          (dolist (overlay (e--wholly-contained-instructions (current-buffer) start end))
             (when (overlay-get overlay 'e-instruction)
               (e--delete-instruction overlay)
               (setq deleted-count (1+ deleted-count))))
