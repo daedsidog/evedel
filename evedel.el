@@ -60,17 +60,17 @@
   :type 'string
   :group 'evedel)
 
-(defcustom e-instruction-bg-tint-intensity 0.075
+(defcustom e-instruction-bg-tint-intensity 0.1
   "Default intensity for background tinting of instructions."
   :type 'float
   :group 'evedel)
 
-(defcustom e-instruction-label-tint-intensity 0.25
+(defcustom e-instruction-label-tint-intensity 0.2
   "Default intensity for label tinting of instructions."
   :type 'float
   :group 'evedel)
 
-(defcustom e-subinstruction-tint-intensity 0.5
+(defcustom e-subinstruction-tint-intensity 0.4
   "Coeffecient multiplied by by tint intensities.
 
 Only applicable to the subinstructions. Makes it possible to have more a
@@ -1200,6 +1200,13 @@ If FACE is nil, removes the face property from the REGEX match in STRING."
         (remove-text-properties (match-beginning 0) (match-end 0) '(face nil))))
     (buffer-string)))
 
+(defun e--instruction-bufferlevel-p (instruction)
+  "Return t if INSTRUCTION contains the entirety of its buffer."
+  (let ((buffer (overlay-buffer instruction)))
+    (and buffer
+         (= (overlay-start instruction) (point-min))
+         (= (overlay-end instruction) (point-max)))))
+
 (defun e--update-instruction-overlay (instruction &optional update-children)
   "Update the appearance of the INSTRUCTION overlay.
 
@@ -1230,16 +1237,20 @@ non-nil."
                             (save-excursion
                               (goto-char (overlay-start instruction))
                               (make-string (current-column) ? ))))
+                 (is-bufferlevel (e--instruction-bufferlevel-p instruction))
+                 (parent-bufferlevel (and parent (e--instruction-bufferlevel-p parent)))
                  (label "")
                  color)
              (pcase instruction-type
                (:reference ; REFERENCE
                 (setq color e-reference-color)
                 (if (and parent
-                         
-                         (eq (e--instruction-type parent) :reference))
+                         (and (eq (e--instruction-type parent) :reference)
+                              (not parent-bufferlevel)))
                     (setq label "SUBREFERENCE")
-                  (setq label "REFERENCE"))
+                  (if is-bufferlevel
+                      (setq label "BUFFER REFERENCE")
+                    (setq label "REFERENCE")))
                 (when-let ((tags (e--reference-tags instruction)))
                   (setq label (concat
                                label
@@ -1297,26 +1308,26 @@ non-nil."
                                 (setq matchinfo "REFERENCES UNTAGGED ONLY")
                               (setq matchinfo "REFERENCES NOTHING")))
                           (setq label (concat label "\n" padding matchinfo)))))))))
-             (let* ((parent-label-color
-                     (if parent
-                         (overlay-get parent 'e-label-color)
-                       (face-foreground 'default)))
+             (let* ((default-fg (face-foreground 'default))
+                    (default-bg (face-background 'default))
+                    (parent-label-color
+                     (if parent (overlay-get parent 'e-label-color) default-fg))
                     (parent-bg-color
-                     (if parent
-                         (overlay-get parent 'e-bg-color)
-                       (face-background 'default)))
+                     (if parent (overlay-get parent 'e-bg-color) default-bg))
                     (label-tint-intensity
                      (if parent
                          (* e-subinstruction-tint-intensity e-instruction-label-tint-intensity)
                        e-instruction-label-tint-intensity))
                     (bg-tint-intensity
-                     (if parent
+                     (if (and parent (not parent-bufferlevel))
                          (* e-subinstruction-tint-intensity e-instruction-bg-tint-intensity)
                        e-instruction-bg-tint-intensity))
-                    (label-color (e--tint parent-label-color
-                                          color
-                                          label-tint-intensity))
-                    (bg-color (e--tint parent-bg-color color bg-tint-intensity)))
+                    (label-color (e--tint parent-label-color color label-tint-intensity))
+                    (bg-color (if is-bufferlevel
+                                  default-bg
+                                (e--tint parent-bg-color color bg-tint-intensity))))
+               ;; Here, we want to make sure that the buffer-level instructions don't superfluously
+               ;; tint the background.
                (overlay-put instruction 'e-bg-color bg-color)
                (overlay-put instruction 'e-label-color label-color)
                (overlay-put instruction 'priority priority)
@@ -1376,10 +1387,10 @@ non-nil."
                                 (colorize-region-as-parent mark (point))))
                             (buffer-string))))
                      (overlay-put instruction 'before-string before-string))))
-               (overlay-put instruction 'face `(:extend t :background ,bg-color))))
+               (overlay-put instruction 'face `(:extend t :background ,bg-color)))
            (when update-children
              (dolist (child (e--child-instructions instruction))
-               (aux child update-children (1+ priority) instruction)))))
+               (aux child update-children (1+ priority) instruction))))))
       (let ((instructions-conflicting (cl-some (lambda (instr)
                                                  (and (not (eq instr instruction))
                                                       (e--instructions-congruent-p instruction
