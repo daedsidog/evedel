@@ -328,7 +328,7 @@ Throw a user error if no instructions to delete were found."
     (if (use-region-p)
         (let ((start (region-beginning))
               (end (region-end)))
-          (dolist (overlay (overlays-in start end))
+          (dolist (overlay (e--wholly-contained-instructions (current-buffer) start end))
             (when (overlay-get overlay 'e-instruction)
               (e--delete-instruction overlay)
               (setq deleted-count (1+ deleted-count))))
