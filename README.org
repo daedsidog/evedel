@@ -1,10 +1,13 @@
 * Evedel: Instructed LLM Programmer/Assistant
 
+#+begin_quote
+[!WARNING]
 *This is a fledgling project. Expect lots of bugs and missing features.*
+#+end_quote
 
 [[file:media/promo.png]]
 
-Evedel is an extension to the [[https://github.com/karthink/gptel][GPTel]] Emacs package that enhances the workflow of interacting with large language models during programmer. Its primary aim is to shift workload from manually writing code to creating detailed, thoughtful instruction labels for the LLM models, leveraging references to provide contextual understanding of the working environment.
+Evedel is an extension to the [[https://github.com/karthink/gptel][gptel]] adds a new workflow of interacting with LLMs during programming. Its primary aim is to shift workload from manually writing code to creating detailed, thoughtful instruction labels for the models, leveraging references to provide contextual understanding of the working environment.
 
 Evedel is versatile enough so that it can be utilized in various types of buffers, and isn't limited to just programming buffers.
 
@@ -12,7 +15,7 @@ Evedel is versatile enough so that it can be utilized in various types of buffer
 
 [[file:media/complex-labeling-example.png]]
 
-- Uses [[https://github.com/karthink/gptel][GPTel]] as a backend, so no extra setup is necessary if you already use it.
+- Uses [[https://github.com/karthink/gptel][gptel]] as a backend, so no extra setup is necessary if you already use it.
 - Uses overlays for tracking instructions instead of raw text, which means that the instructions are not part of your file or buffer. The overlays are mostly intuitive and can be customized, and try not to interfere with the regular Emacs workflow.
 - Can save your instruction overlays so you won't have to restart the instruction labeling process every time you start a new Emacs session.
 - Can categorize your references with tags, and use complex query expressions to determine what to sent to the model in directives.
@@ -23,7 +26,7 @@ Evedel is versatile enough so that it can be utilized in various types of buffer
 :CUSTOM_ID: requirements
 :END:
 
-- [[https://github.com/karthink/gptel][GPTel]]
+- [[https://github.com/karthink/gptel][gptel]]
 - Emacs version 29.1 or higher
 
 ** Usage
@@ -58,7 +61,7 @@ Below is an example of scaling existing instruction overlay (in this case, a ref
 |-----------------------------------+---------------------------------------------------------|
 | =evedel-save-instructions=        | Save current instruction overlays to a specified file.  |
 | =evedel-load-instructions=        | Load instruction overlays from a specified file.        |
-| =evedel-process-directives=       | Process directives by sending them to GPTel.            |
+| =evedel-process-directives=       | Process directives by sending them to gptel.            |
 | =evedel-convert-instructions=     | Convert between reference and directive types at point. |
 | =evedel-instruction-count=        | Return the number of instructions currently loaded.     |
 | =evedel-preview-directive-prompt= | Preview directive prompt at the current point.          |
@@ -139,7 +142,7 @@ Frequently save your instructions, and keep a version of instructions for every 
 
 ** Setup
 
-Before proceeding, make sure you have [[https://github.com/karthink/gptel][GPTel]] configured (see [[#requirements][requirements]]). *This package will not work without it.*
+Before proceeding, make sure you have [[https://github.com/karthink/gptel][gptel]] configured (see [[#requirements][requirements]]). *This package will not work without it.*
 Clone the Evedel repository:
    
 #+begin_src sh
@@ -191,11 +194,13 @@ Mark indicates previously planned features that have been implemented.
 - [ ] Tag autocompletion when writing directive tag query
 - [ ] Windows references: describe to the model the contents of a particular Emacs window.
 - [ ] Whole-Emacs references: describe to the model the entire status of the Emacs session.
+- [ ] Reference commentary
 
 *** Directive Management
 
 - [ ] Sequential execution of dependent directives
 - [ ] Interactive directive result diff, i.e. being able to tell the model what to correct.
+- [ ] Automatic inference of tags required by directive
   
 *** Interface
 
@@ -212,6 +217,7 @@ Mark indicates previously planned features that have been implemented.
 
 ** Acknowledgments
 
-- Special thanks to [[https://github.com/karthink][Karthik Chikmagalur]] for the excellent [[https://github.com/karthink/gptel][GPTel]] package
+- Special thanks to [[https://github.com/karthink][Karthik Chikmagalur]] for the excellent [[https://github.com/karthink/gptel][gptel]] package
 
-#  LocalWords:  LLM Evedel DWIM Evedel's GPTel evedel backend untagged autocomplete autocompletion
+#  LocalWords:  LLM Evedel DWIM Evedel's gptel evedel backend untagged autocomplete autocompletion
+#  LocalWords:  LLMs
