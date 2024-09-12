@@ -1675,7 +1675,7 @@ Returns the prompt as a string."
                                                                     (overlay-start y)))))
                                              (cl-return alist))))
          (reference-count (length toplevel-references))
-         (directive-toplevel-reference (e--topmost-instruction directive :reference))
+         (directive-toplevel-reference (e--topmost-instruction directive :reference pred))
          (directive-buffer (overlay-buffer directive))
          ;; Should the directive buffer have a valid file path, we should use a relative path for
          ;; the other references, assuming that they too have a valid file path.
