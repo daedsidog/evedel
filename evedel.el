@@ -749,6 +749,18 @@ Signals an error when the query is malformed."
                     do (puthash tag t tags-hash))))
     (hash-table-keys tags-hash)))
 
+(defun e--cycle-list-around (element list)
+  "Cycle list LIST around ELEMENT.
+
+If ELEMENT is found in LIST, returns a list with ELEMENT as the head and the rest
+of the list rotated around it.  Otherwise, returns the LIST."
+  (if-let ((element-tail (member element list)))
+      (append element-tail 
+              (cl-loop for elt in list
+                       while (not (eq elt element))
+                       collect elt))
+    list))
+
 (defun e--cycle-instruction (type direction)
   "Get the next or previous instruction overlay of TYPE.
 DIRECTION should be `:next' or `:previous' from the current point.
@@ -757,18 +769,13 @@ If no instruction found in the buffer, checks the next buffers in
 the `evedel--instructions' alist.
 
 Returns the found instruction, if any."
-  (let ((buffers (mapcar #'car e--instructions))
-        (original-buffer (current-buffer))
-        (found-instr))
-    (let ((prev-buffers ()))
-      (cl-do ((buflist buffers (cdr buflist)))
-          ((or (null buflist)
-               (eq original-buffer (car buflist)))
-           (nreverse prev-buffers)
-           (when buflist
-             (setf (cdr (last buflist)) prev-buffers)
-             (setq buffers buflist)))
-        (push (car buflist) prev-buffers)))
+  ;; We want the buffers to be a cyclic list, based on the current buffer.
+  (let* ((buffers (let ((bufs (mapcar #'car e--instructions)))
+                    (if (eq direction :next)
+                        (e--cycle-list-around (current-buffer) bufs)
+                      (e--cycle-list-around (current-buffer) (nreverse bufs)))))
+         (original-buffer (current-buffer))
+         (found-instr))
     (while (and buffers (null found-instr))
       (let* ((buffer (car buffers))
              (instrs (e--foreach-instruction (instr buffer) collect instr)))
@@ -780,19 +787,12 @@ Returns the found instruction, if any."
         (let ((sorting-pred (pcase direction
                               (:next #'<)
                               (:previous #'>))))
-          (with-current-buffer buffer
-            (cl-flet ((point-or-edge-pos ()
-                        (if (eq buffer original-buffer)
-                            (point)
-                          (pcase direction
-                            (:next (point-min))
-                            (:previous (point-max))))))
-              (setq instrs (cl-remove-if-not (lambda (instr)
-                                               (and (funcall sorting-pred
-                                                             (point-or-edge-pos)
-                                                             (overlay-start instr))
-                                                    (overlay-buffer instr)))
-                                             instrs))))
+          (when (eq buffer original-buffer)
+            (setq instrs (cl-remove-if-not (lambda (instr)
+                                             (funcall sorting-pred
+                                                      (point)
+                                                      (overlay-start instr)))
+                                           instrs)))
           (setq instrs (sort instrs (lambda (instr1 instr2)
                                       (funcall sorting-pred
                                                (overlay-start instr1)
