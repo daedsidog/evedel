@@ -35,48 +35,52 @@
 (require 'cl-lib)
 (require 'gptel)
 
+(defgroup evedel nil
+  "Customization group for Evedel."
+  :group 'tools)
+
 (defcustom e-reference-color "yellow"
   "Color to be used as a tint for reference overlays."
-  :type 'string
-  :group 'evedel)
+  :type 'string)
 
 (defcustom e-directive-color "orange"
   "Color to be used as a tint for directive overlays."
-  :type 'string
-  :group 'evedel)
+  :type 'string)
 
 (defcustom e-directive-processing-color "cyan"
   "Color to be used as a tint for directives being processed by the model."
-  :type 'string
-  :group 'evedel)
+  :type 'string)
 
 (defcustom e-directive-success-color "green"
   "Color to be used as a tint for directives successfully processed by the model."
-  :type 'string
-  :group 'evedel)
+  :type 'string)
 
 (defcustom e-directive-fail-color "red"
   "Color to be used as a tint for directives the model could not process."
-  :type 'string
-  :group 'evedel)
+  :type 'string)
+
+(defcustom e-highlighted-instruction-color "cyan"
+  "Color for currently highlighted instructions."
+  :type 'string)
 
 (defcustom e-instruction-bg-tint-intensity 0.075
   "Default intensity for background tinting of instructions."
-  :type 'float
-  :group 'evedel)
+  :type 'float)
 
 (defcustom e-instruction-label-tint-intensity 0.2
   "Default intensity for label tinting of instructions."
-  :type 'float
-  :group 'evedel)
+  :type 'float)
 
-(defcustom e-subinstruction-tint-intensity 0.4
+(defcustom e-highlighted-instruction-tint-intensity 0.2
+  "Default intensity for tinting of highlighted instructions."
+  :type 'float)
+
+(defcustom e-subinstruction-tint-coefficient 0.4
   "Coeffecient multiplied by by tint intensities.
 
 Only applicable to the subinstructions. Makes it possible to have more a
 more finely-tuned control over how tinting looks."
-  :type 'float
-  :group 'evedel)
+  :type 'float)
 
 (defcustom e-empty-tag-query-matches-all t
   "Determines behavior of directives without a tag search query.
@@ -84,8 +88,7 @@ more finely-tuned control over how tinting looks."
 If set to t, directives without a specific tag search query will use all
 available references.  Alternatively, if this is set to nil, directives without 
 a search query will not use any references."
-  :type 'boolean
-  :group 'evedel)
+  :type 'boolean)
 
 (defcustom e-always-match-untagged-references t
   "Controls inclusion of untagged references in directive prompts.
@@ -94,8 +97,7 @@ When set to t, untagged references are always incorporated into directive
 references, ensuring comprehensive coverage.  Conversely, when set to nil,
 untagged references are ignored, unless `evedel-empty-tag-query-matches-all'
 is set to t."
-  :type 'boolean
-  :group 'evedel)
+  :type 'boolean)
 
 (defcustom e-descriptive-mode-roles
   '((emacs-lisp-mode . "an Emacs Lisp programmer")
@@ -107,12 +109,12 @@ is set to t."
   "Assciation list between major modes and model roles.
 
 Answers the question \"who is the model?\""
-  :type 'list
-  :group 'evedel)
+  :type 'list)
 
 (defvar e--instructions ()
   "Association list mapping buffers to lists of instruction overlays.")
 (defvar e--default-instruction-priority -99)
+(defvar e--highlighted-instruction nil)
 
 (defmacro e--foreach-instruction (binding &rest body)
   "Iterate over `evedel--instructions' with BINDING as the binding.
@@ -257,11 +259,39 @@ command will resize the directive in the following manner:
   (interactive)
   (e--create-instruction :directive))
 
+(defun e-cycle-instructions-at-point (point)
+  "Cycle through instructions at POINT, highlighting them.
+
+This command allows for cycling through overlapping instructions at a
+point in the buffer and allows one to have better accuracy when instructions
+overlap to the point where no other reasonable option is available."
+  (interactive "d")
+  (let ((instructions-at-point (e--instructions-at point))
+        (original-highlighted-instruction e--highlighted-instruction))
+    (cond
+     ((null instructions-at-point)
+      (setq e--highlighted-instruction nil)
+      (when (called-interactively-p 'any)
+        (message "No instructions at point")))
+     ((or (null e--highlighted-instruction)
+          (not (memq e--highlighted-instruction instructions-at-point)))
+      (setq e--highlighted-instruction nil)
+      (setq e--highlighted-instruction (e--highest-priority-instruction instructions-at-point)))
+     (t
+      (if-let ((parent (e--parent-instruction e--highlighted-instruction)))
+          (setq e--highlighted-instruction parent)
+        (setq e--highlighted-instruction nil))))
+    (when e--highlighted-instruction
+      (e--update-instruction-overlay e--highlighted-instruction))
+    (when original-highlighted-instruction
+      (e--update-instruction-overlay original-highlighted-instruction))
+    e--highlighted-instruction))
+
 (defun e-modify-directive ()
   "Modify the directive under the point."
   (interactive)
-  (when-let ((directive (e--highest-priority-instruction
-                         (e--instructions-at (point) :directive))))
+  (when-let ((directive (e--highest-priority-instruction (e--instructions-at (point) :directive)
+                                                         t)))
     (when (eq (overlay-get directive 'e-directive-status) :processing)
       (user-error "Cannot modify a directive that is being processed"))
     (e--read-directive directive)))
@@ -303,8 +333,9 @@ If a region is not selected and there is a directive under the point, send it."
                      directive-count
                      (if (> directive-count 1) "s" ""))))
       (if-let ((directive (e--topmost-instruction (e--highest-priority-instruction
-                                                    (e--instructions-at (point) :directive))
-                                                   :directive)))
+                                                   (e--instructions-at (point) :directive)
+                                                   t)
+                                                  :directive)))
           (progn
             (execute directive)
             (message "Sent directive to gptel for processing"))
@@ -381,7 +412,8 @@ will throw a user error."
                                                (region-end))
                          (cl-remove-if #'null
                                        (list (e--highest-priority-instruction
-                                              (e--instructions-at (point)))))))
+                                              (e--instructions-at (point)))
+                                             t))))
          (num-instructions (length instructions))
          (converted-directives-to-references 0)
          (converted-references-to-directives 0))
@@ -504,14 +536,16 @@ Examples:
   (cat or dog or (sheep and black))
   ((cat and dog) or (dog and goose))"
   (interactive)
-  (let ((directive (e--highest-priority-instruction (e--instructions-at (point) :directive))))
+  (let ((directive (e--highest-priority-instruction (e--instructions-at (point) :directive) t)))
     (e--read-directive-tag-query directive)))
 
-(defun e-add-tags ()
-  "Add tags to the reference under the point."
+(defun e-add-tags (&optional reference)
+  "Add tags to the reference under the point.
+
+Adds specificly to REFERENCE if it is non-nil."
   (interactive)
   (let* ((instructions (e--instructions-at (point) :reference))
-         (instr (e--highest-priority-instruction instructions)))
+         (instr (or reference (e--highest-priority-instruction instructions t))))
     (if instr
         (let* ((existing-tags (e--available-tags))
                (input (completing-read-multiple "Add tags: " existing-tags nil nil))
@@ -524,7 +558,7 @@ Examples:
   "Remove tags from the reference under the point."
   (interactive)
   (let* ((instructions (e--instructions-at (point) :reference))
-         (instr (e--highest-priority-instruction instructions)))
+         (instr (e--highest-priority-instruction instructions t)))
     (if instr
         (let ((tags-list (e--reference-tags instr)))
           (if (null tags-list)
@@ -848,7 +882,7 @@ If INCLUDE-PARENT-TAG is non-nil, gets te parent's tags as well."
 
 Returns the deleted instruction overlay."
   (let* ((instructions (e--instructions-at point))
-         (target (e--highest-priority-instruction instructions)))
+         (target (e--highest-priority-instruction instructions t)))
     (when target
       (e--delete-instruction target))))
 
@@ -899,9 +933,11 @@ function will resize it. See either `evedel-create-reference' or
             (user-error "Instruction intersects with existing instruction"))
           (let* ((buffer (current-buffer))
                  (instruction (if (eq type :reference)
-                                  (e--create-reference-in buffer
-                                                                 (region-beginning)
-                                                                 (region-end))
+                                  (let ((ref (e--create-reference-in buffer
+                                                                     (region-beginning)
+                                                                     (region-end))))
+                                    (e-add-tags ref)
+                                    ref)
                                 (e--create-directive-in buffer
                                                                (region-beginning)
                                                                (region-end)))))
@@ -974,10 +1010,18 @@ that the resulting color is the same as the TINT-COLOR-NAME color."
                             tint)))
     (apply 'color-rgb-to-hex `(,@result 2))))
 
-(defun e--highest-priority-instruction (instructions)
+(cl-defun e--highest-priority-instruction (instructions &optional return-highlighted)
   "Return the instruction with the highest priority from the INSTRUCTIONS list.
 
-Priority here refers to the priority property used by overlays."
+Priority here refers to the priority property used by overlays.
+
+If RETURN-HIGHLIGHTED is non-nil and `e--highlighted-instruction' is non-nil,
+the function will return `e--highlighted-instruction' if it is also in the
+INSTRUCTIONS list."
+  (when (and return-highlighted
+             e--highlighted-instruction
+             (member e--highlighted-instruction instructions))
+    (cl-return-from e--highest-priority-instruction e--highlighted-instruction))
   (cl-reduce (lambda (acc instruction)
                (if (or (not acc)
                        (> (or (overlay-get instruction 'priority)
@@ -1320,11 +1364,11 @@ non-nil."
                      (if parent (overlay-get parent 'e-bg-color) default-bg))
                     (label-tint-intensity
                      (if (and parent (not parent-bufferlevel))
-                         (* e-subinstruction-tint-intensity e-instruction-label-tint-intensity)
+                         (* e-subinstruction-tint-coefficient e-instruction-label-tint-intensity)
                        e-instruction-label-tint-intensity))
                     (bg-tint-intensity
                      (if (and parent (not parent-bufferlevel))
-                         (* e-subinstruction-tint-intensity e-instruction-bg-tint-intensity)
+                         (* e-subinstruction-tint-coefficient e-instruction-bg-tint-intensity)
                        e-instruction-bg-tint-intensity))
                     (label-color (e--tint parent-label-color color label-tint-intensity))
                     (bg-color (if is-bufferlevel
@@ -1335,6 +1379,12 @@ non-nil."
                (overlay-put instruction 'e-bg-color bg-color)
                (overlay-put instruction 'e-label-color label-color)
                (overlay-put instruction 'priority priority)
+               (when (eq instruction
+                         e--highlighted-instruction)
+                 (setq bg-color
+                       (e--tint default-bg
+                                e-highlighted-instruction-color
+                                e-highlighted-instruction-tint-intensity)))
                (let ((instruction-is-at-eol (with-current-buffer (overlay-buffer instruction)
                                               (save-excursion
                                                 (goto-char (overlay-end instruction))
