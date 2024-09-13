@@ -1,4 +1,4 @@
-* Evedel: Instructed LLM Programmer/Assistant
+* Evedel  : Instructed LLM Programmer/Assistant
 
 #+begin_quote
 [!WARNING]
@@ -78,16 +78,17 @@ Here's an example of previewing a directive prompt:
 
 *** Navigation
 
-|-------------------------------+-------------------------------------------------------|
-| Command                       | Command Description                                   |
-|-------------------------------+-------------------------------------------------------|
-| =evedel-next-instruction=     | Cycle through instructions in the forward direction.  |
-| =evedel-previous-instruction= | Cycle through instructions in the backward direction. |
-| =evedel-next-reference=       | Cycle through references in the forward direction.    |
-| =evedel-previous-reference=   | Cycle through references in the backward direction.   |
-| =evedel-next-directive=       | Cycle through directives in the forward direction.    |
-| =evedel-previous-directive=   | Cycle through directives in the backward direction.   |
-|-------------------------------+-------------------------------------------------------|
+|--------------------------------------+-------------------------------------------------------------|
+| Command                              | Command Description                                         |
+|--------------------------------------+-------------------------------------------------------------|
+| =evedel-next-instruction=            | Cycle through instructions in the forward direction.        |
+| =evedel-previous-instruction=        | Cycle through instructions in the backward direction.       |
+| =evedel-next-reference=              | Cycle through references in the forward direction.          |
+| =evedel-previous-reference=          | Cycle through references in the backward direction.         |
+| =evedel-next-directive=              | Cycle through directives in the forward direction.          |
+| =evedel-previous-directive=          | Cycle through directives in the backward direction.         |
+| =evedel-cycle-instructions-at-point= | Cycle through instructions at the point, highlighting them. |
+|--------------------------------------+-------------------------------------------------------------|
 
 *** Categorization
 
@@ -152,28 +153,21 @@ git clone https://github.com/daedsidog/evedel.git
 Add the path to the cloned repository in your Emacs configuration. You can do this by adding the following code to your =init.el= or =config.el= file:
 
 #+begin_src emacs-lisp
-(add-to-list 'load-path "/path/to/evedel")
-
-Use =use-package= to configure Evedel as shown in the snippet below:
-
-#+begin_src emacs-lisp
-(use-package evedel
-  :config
-  (customize-set-variable 'evedel-empty-tag-query-matches-all nil)
-  :bind (("C-c e r" . evedel-create-reference)
-         ("C-c e d" . evedel-create-directive)
-         ("C-c e s" . evedel-save-instructions)
-         ("C-c e l" . evedel-load-instructions)
-         ("C-c e p" . evedel-process-directives)
-         ("C-c e m" . evedel-modify-directive)
-         ("C-c e k" . evedel-delete-instructions)
-         ("C-c e c" . evedel-convert-instructions)
-         ("C->"     . evedel-next-instruction)
-         ("C-<"     . evedel-previous-instruction)
-         ("C-c e t" . evedel-add-tags)
-         ("C-c e T" . evedel-remove-tags)
-         ("C-c e D" . evedel-modify-directive-tag-query)
-         ("C-c e P" . evedel-preview-directive-prompt)))
+:bind (("C-c e r" . evedel-create-reference)
+       ("C-c e d" . evedel-create-directive)
+       ("C-c e s" . evedel-save-instructions)
+       ("C-c e l" . evedel-load-instructions)
+       ("C-c e p" . evedel-process-directives)
+       ("C-c e m" . evedel-modify-directive)
+       ("C-c e k" . evedel-delete-instructions)
+       ("C-c e c" . evedel-convert-instructions)
+       ("C->"     . evedel-next-instruction)
+       ("C-<"     . evedel-previous-instruction)
+       ("C-."     . evedel-cycle-instructions-at-point)
+       ("C-c e t" . evedel-add-tags)
+       ("C-c e T" . evedel-remove-tags)
+       ("C-c e D" . evedel-modify-directive-tag-query)
+       ("C-c e P" . evedel-preview-directive-prompt))
 #+end_src
    
 Make sure to replace ="/path/to/evedel"= with the actual path where you cloned the Evedel repository.
@@ -186,7 +180,7 @@ Mark indicates previously planned features that have been implemented.
 
 - *[X] Basic cyclic navigation between instruction across buffers*
 - [ ] Reference navigation based on a tag query
-  
+
 *** Reference Management
 
 - *[X] Reference categorization via tags*
@@ -199,8 +193,8 @@ Mark indicates previously planned features that have been implemented.
 *** Directive Management
 
 - [ ] Sequential execution of dependent directives
-- [ ] Interactive directive result diff, i.e. being able to tell the model what to correct.
-- [ ] Automatic inference of tags required by directive
+- [ ] Interactive directive result diff & extra procedures
+- [ ] Automatic RAG
   
 *** Interface
 
