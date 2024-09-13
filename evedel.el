@@ -903,12 +903,16 @@ If a region is selected but partially covers an existing instruction, then the
 function will resize it. See either `evedel-create-reference' or
 `evedel-create-directive' for details on how the resizing works."
   (if (use-region-p)
-      (let ((intersecting-instructions (e--partially-contained-instructions (current-buffer)
-                                                                            (region-beginning)
-                                                                            (region-end))))
+      (let ((intersecting-instructions
+             (cl-remove-if (lambda (instr)
+                             (xor (= (overlay-start instr) (region-beginning))
+                                  (= (overlay-end instr) (region-end))))
+                           (e--partially-contained-instructions (current-buffer)
+                                                                (region-beginning)
+                                                                (region-end)))))
         (if-let ((instructions
-                  (cl-remove-if-not (lambda (inst)
-                                      (eq (e--instruction-type inst) type))
+                  (cl-remove-if-not (lambda (instr)
+                                      (eq (e--instruction-type instr) type))
                                     intersecting-instructions)))
             (progn
               (dolist (instruction instructions)
