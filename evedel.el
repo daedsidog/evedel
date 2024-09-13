@@ -548,7 +548,8 @@ Adds specificly to REFERENCE if it is non-nil."
          (instr (or reference (e--highest-priority-instruction instructions t))))
     (if instr
         (let* ((existing-tags (e--available-tags))
-               (input (completing-read-multiple "Add tags: " existing-tags nil nil))
+               (input (completing-read-multiple "Add tags (or leave empty): "
+                                                existing-tags nil nil))
                (new-tags (mapcar 'intern input)))
             (let ((added (e--add-tags instr new-tags)))
               (message "%d tag%s added" added (if (= added 1) "" "s"))))
@@ -933,15 +934,16 @@ function will resize it. See either `evedel-create-reference' or
             (user-error "Instruction intersects with existing instruction"))
           (let* ((buffer (current-buffer))
                  (instruction (if (eq type :reference)
-                                  (let ((ref (e--create-reference-in buffer
-                                                                     (region-beginning)
-                                                                     (region-end))))
-                                    (e-add-tags ref)
-                                    ref)
+                                  (e--create-reference-in buffer
+                                                          (region-beginning)
+                                                          (region-end))
                                 (e--create-directive-in buffer
-                                                               (region-beginning)
-                                                               (region-end)))))
-            (with-current-buffer buffer (deactivate-mark))
+                                                        (region-beginning)
+                                                        (region-end)))))
+            (with-current-buffer buffer
+              (deactivate-mark)
+              (when (eq type :reference)
+                (e-add-tags instruction)))
             instruction)))
     (when (eq type :directive)
       (prog1 (e--create-directive-in (current-buffer) (point) (point) t)
