@@ -155,31 +155,49 @@ handles all the internal bookkeeping and cleanup."
                                 (alist-get ,buffer e--instructions)
                               (flatten-tree (mapcar #'cdr e--instructions)))
                          ,@body))))))
-
 ;;;###autoload
 (defun e-save-instructions (path)
   "Save instructions overlays to a file PATH specified by the user."
   (interactive (list (read-file-name "Save instruction list to file: ")))
-  (let ((saved-instructions (e--foreach-instruction inst
-                              collect (list :file (buffer-file-name (overlay-buffer inst))
-                                            :buffer (buffer-name (overlay-buffer inst))
-                                            :overlay-start (overlay-start inst)
-                                            :overlay-end (overlay-end inst)
-                                            :properties (overlay-properties inst)))))
-    (if saved-instructions
-        (with-temp-file path
-          (prin1 saved-instructions (current-buffer))
-          (let ((buffer-count (length (cl-remove-duplicates (mapcar (lambda (inst)
-                                                                      (plist-get inst :buffer))
-                                                                    saved-instructions)))))
-            (message "Saved %d Evedel instruction%s from %d buffer%s to %s"
-                     (length saved-instructions)
-                     (if (= 1 (length saved-instructions)) "" "s")
-                     buffer-count
-                     (if (= 1 buffer-count) "" "s")
-                     path)))
-      (when (called-interactively-p 'any)
-        (message "No Evedel instructions to save")))))
+  (let ((buffer-alist ())
+        (file-alist ())
+        (saved-instruction-count 0))
+    (e--foreach-instruction instr
+      do (let ((file (file-relative-name (buffer-file-name (overlay-buffer instr))
+                                         (file-name-directory path)))
+               (buffer (buffer-name (overlay-buffer instr))))
+           (cl-incf saved-instruction-count)
+           (push (list :overlay-start (overlay-start instr)
+                       :overlay-end (overlay-end instr)
+                       :properties (overlay-properties instr))
+                 (plist-get (alist-get (if file file buffer)
+                                       (if file file-alist buffer-alist)
+                                       nil
+                                       nil
+                                       #'equal)
+                            :instructions))))
+    (cl-loop for buffer-cons in buffer-alist
+             do (with-current-buffer (car buffer-cons)
+                  (setf (plist-get (car buffer-cons) :original-content)
+                        (buffer-substring-no-properties (point-min) (point-max)))))
+    (cl-loop for file-cons in file-alist
+             do (with-current-buffer (or (find-buffer-visiting (car file-cons))
+                                         (find-file-noselect (car file-cons)))
+                  (setf (plist-get (cdr file-cons) :original-content)
+                        (buffer-substring-no-properties (point-min) (point-max)))))
+    (let ((data (list :files file-alist :buffers buffer-alist)))
+      (if (not (zerop saved-instruction-count))
+          (with-temp-file path
+            (prin1 data (current-buffer))
+            (let ((buffer-count (+ (length file-alist) (length buffer-alist))))
+              (message "Saved %d Evedel instruction%s from %d buffer%s to %s"
+                       saved-instruction-count
+                       (if (= 1 saved-instruction-count) "" "s")
+                       buffer-count
+                       (if (= 1 buffer-count) "" "s")
+                       path)))
+        (when (called-interactively-p 'any)
+          (message "No Evedel instructions to save"))))))
 
 ;;;###autoload
 (defun e-load-instructions (path)
@@ -1559,30 +1577,6 @@ The PRED must be a function which accepts an instruction."
                (or (null pred) (funcall pred best-instruction)))
           best-instruction
         nil))))
-
-(defun e--recreate-instructions ()
-  "Recreate all instructions.  Used for debugging purposes."
-  (interactive)
-  (let ((instructions (e--foreach-instruction inst
-                        collect (list :start (overlay-start inst)
-                                      :end (overlay-end inst)
-                                      :buffer (overlay-buffer inst)
-                                      :type (evedel--instruction-type inst))))
-        (recreated 0))
-    (e-delete-all-instructions)
-    (dolist (instruction instructions)
-      (cl-destructuring-bind (&key start end buffer type) instruction
-        (pcase type
-          (:reference
-           (e--create-reference-in buffer start end)
-           (cl-incf recreated))
-          (:directive
-           (e--create-directive-in buffer start end)
-           (cl-incf recreated)))))
-    (when (called-interactively-p 'any)
-      (message "Recreated %d out of %d Evedel instructions"
-               recreated
-               (length instructions)))))
 
 (defun e--directive-text (directive)
   "Return the directive text of the DIRECTIVE overlay."
