@@ -161,7 +161,9 @@ handles all the internal bookkeeping and cleanup."
   "Save instructions overlays to a file PATH specified by the user."
   (interactive (list (read-file-name "Save instruction list to file: ")))
   (let ((saved-instructions (e--foreach-instruction inst
-                              collect (list :file (buffer-file-name (overlay-buffer inst))
+                              collect (list :file (file-relative-name
+                                                   (buffer-file-name (overlay-buffer inst))
+                                                   (file-name-directory path))
                                             :buffer (buffer-name (overlay-buffer inst))
                                             :overlay-start (overlay-start inst)
                                             :overlay-end (overlay-end inst)
@@ -1559,30 +1561,6 @@ The PRED must be a function which accepts an instruction."
                (or (null pred) (funcall pred best-instruction)))
           best-instruction
         nil))))
-
-(defun e--recreate-instructions ()
-  "Recreate all instructions.  Used for debugging purposes."
-  (interactive)
-  (let ((instructions (e--foreach-instruction inst
-                        collect (list :start (overlay-start inst)
-                                      :end (overlay-end inst)
-                                      :buffer (overlay-buffer inst)
-                                      :type (evedel--instruction-type inst))))
-        (recreated 0))
-    (e-delete-all-instructions)
-    (dolist (instruction instructions)
-      (cl-destructuring-bind (&key start end buffer type) instruction
-        (pcase type
-          (:reference
-           (e--create-reference-in buffer start end)
-           (cl-incf recreated))
-          (:directive
-           (e--create-directive-in buffer start end)
-           (cl-incf recreated)))))
-    (when (called-interactively-p 'any)
-      (message "Recreated %d out of %d Evedel instructions"
-               recreated
-               (length instructions)))))
 
 (defun e--directive-text (directive)
   "Return the directive text of the DIRECTIVE overlay."
