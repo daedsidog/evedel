@@ -414,31 +414,25 @@ will throw a user error."
                                                (region-end))
                          (cl-remove-if #'null
                                        (list (e--highest-priority-instruction
-                                              (e--instructions-at (point)))
-                                             t))))
+                                              (e--instructions-at (point))
+                                              t)))))
          (num-instructions (length instructions))
          (converted-directives-to-references 0)
          (converted-references-to-directives 0))
     (if (= num-instructions 0)
         (user-error "No instructions to convert")
       (dolist (instr instructions)
-        (let ((start (overlay-start instr))
-              (end (overlay-end instr))
-              (buffer (overlay-buffer instr))
-              (directive-text (overlay-get instr 'e-directive)))
-          (cond
-           ((e--directivep instr)
-            (unless (e--bodyless-instruction-p instr)
-              (e--delete-instruction instr)
-              (let ((overlay (e--create-reference-in buffer start end)))
-                (overlay-put overlay 'e-directive directive-text))
-              (setq converted-directives-to-references (1+ converted-directives-to-references))))
-           ((e--referencep instr)
-            (e--delete-instruction instr)
-            (e--create-directive-in buffer start end nil (or directive-text ""))
-            (setq converted-references-to-directives (1+ converted-references-to-directives)))
-           (t
-            (user-error "Unknown instruction type")))))
+        (cond
+         ((e--directivep instr)
+          (unless (e--bodyless-instruction-p instr)
+            (overlay-put instr 'e-instruction-type :reference)
+            (setq converted-directives-to-references (1+ converted-directives-to-references))))
+         ((e--referencep instr)
+          (overlay-put instr 'e-instruction-type :directive)
+          (setq converted-references-to-directives (1+ converted-references-to-directives)))
+         (t
+          (user-error "Unknown instruction type")))
+        (e--update-instruction-overlay instr t))
       (let ((msg "Converted %d instruction%s")
             (conversion-msgs
              (delq nil
@@ -1049,7 +1043,9 @@ INSTRUCTIONS list."
              :initial-value nil))
 
 (defun e--instruction-type (instruction)
-  "Return the type of the INSTRUCTION overlay."
+  "Return the type of the INSTRUCTION overlay.
+
+Instruction type can either be `:reference' or `:directive'."
   (if-let ((type (overlay-get instruction 'e-instruction-type)))
       type
     (error "%s is not an instruction overlay" instruction)))
@@ -1339,7 +1335,8 @@ non-nil."
                            (e--directivep parent))
                       (setq sublabel "DIRECTIVE HINT")
                     (setq sublabel (concat sublabel "DIRECTIVE")))
-                  (let ((directive (string-trim (overlay-get instruction 'e-directive))))
+                  (let ((directive (string-trim (or (overlay-get instruction 'e-directive)
+                                                    ""))))
                     (if (string-empty-p directive)
                         (setq sublabel (concat "EMPTY " sublabel))
                       (setq sublabel (concat sublabel ": ")))
@@ -1682,6 +1679,15 @@ buffer, and the second being the content of the span itself."
                                                            "eol"
                                                          (format "%d" end-colno))))))))
                          (buffer-substring-no-properties beg end)))))))))
+
+(defun e--toplevel-references ()
+  "Fetch all toplevel reference instructions.
+
+A toplevel reference instruction is one that has no parents."
+  (seq-filter (lambda (instr)
+                (and (null (e--parent-instruction instr))
+                     (e--referencep instr)))
+              (e--instructions)))
 
 (defun e--markdown-enquote (input-string)
   "Add Markdown blockquote to each line in INPUT-STRING."
