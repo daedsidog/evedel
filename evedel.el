@@ -1153,13 +1153,6 @@ Returns the deleted instruction overlay."
     (delq instruction (alist-get (overlay-buffer instruction) e--instructions))
     (delete-overlay instruction)
     (dolist (child children)
-      (if (eq (overlay-get child 'e-instruction-type)
-              (overlay-get instruction 'e-instruction-type))
-          (progn
-            (overlay-put child 'e-bg-color (overlay-get instruction 'e-bg-color))
-            (overlay-put child 'e-label-color (overlay-get instruction 'e-label-color)))
-        (overlay-put child 'e-bg-color 'default)
-        (overlay-put child 'e-label-color 'default))
       (e--update-instruction-overlay child t)))
   instruction)
 
@@ -1312,6 +1305,7 @@ non-nil."
                   (setq label (concat
                                label
                                "\n"
+                               padding
                                (e--fill-label-string (propertized-string-from-tags tags)
                                                      "TAGS: "
                                                      padding
