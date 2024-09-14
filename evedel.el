@@ -941,9 +941,16 @@ function will resize it. See either `evedel-create-reference' or
                                   (e--create-reference-in buffer
                                                           (region-beginning)
                                                           (region-end))
-                                (e--create-directive-in buffer
-                                                        (region-beginning)
-                                                        (region-end)))))
+                                (save-window-excursion
+                                  (let ((pos (region-beginning)))
+                                    (unless (<= (window-start) pos (window-end))
+                                      (set-window-start (selected-window)
+                                                        (max (point-min)
+                                                             (- (region-beginning)
+                                                                (- (window-end) (window-start))))))
+                                    (e--create-directive-in buffer
+                                                            (region-beginning)
+                                                            (region-end)))))))
             (with-current-buffer buffer
               (deactivate-mark)
               (when (eq type :reference)
