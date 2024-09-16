@@ -207,25 +207,45 @@ handles all the internal bookkeeping and cleanup."
              (called-interactively-p 'any))
     (unless (y-or-n-p "Discard existing Evedel instructions? ")
       (user-error "Aborted")))
-  (let* ((loaded-instructions (with-temp-buffer
-                                (insert-file-contents path)
-                                (read (current-buffer)))))
-    (unless (listp loaded-instructions)
+  (let* ((loaded-data (with-temp-buffer
+                        (insert-file-contents path)
+                        (read (current-buffer))))
+         (file-alist (plist-get loaded-data :files))
+         (buffer-alist (plist-get loaded-data :buffers)))
+    (unless (and (listp file-alist) (listp buffer-alist))
       (user-error "Malformed Evedel instruction list"))
     (e-delete-all-instructions)
-    (let ((total (length loaded-instructions))
-          (restored 0))
-      (dolist (instr loaded-instructions)
-        (cl-destructuring-bind (&key file buffer overlay-start overlay-end properties) instr
-          (cond
-           ((and file (file-exists-p file))
-            (with-current-buffer (find-file-noselect file)
-              (e--restore-overlay (current-buffer) overlay-start overlay-end properties))
-            (cl-incf restored))
-           ((get-buffer buffer)
-            (with-current-buffer (get-buffer buffer)
-              (e--restore-overlay (current-buffer) overlay-start overlay-end properties))
-            (cl-incf restored)))))
+    (let ((restored 0)
+          (total 0))
+      (cl-labels
+          ((restore-instructions (container get-buffer-fn)
+             (cl-loop for container-cons in container
+                      do (let ((name (car container-cons))
+                               (instructions (plist-get (cdr container-cons)
+                                                        :instructions))
+                               (original-content (plist-get (cdr container-cons)
+                                                            :original-content))
+                               (buffer-reverted nil))
+                           (with-current-buffer (funcall get-buffer-fn name)
+                             (let ((current-content (buffer-substring-no-properties (point-min)
+                                                                                    (point-max))))
+                               ;; TODO implement
+                               ;; (unless (equal current-content original-content)
+                               ;;   ;; Restore the current buffer to its original form in order to
+                               ;;   ;; correctly apply the instructions.
+                               ;;   (erase-buffer)
+                               ;;   (insert original-content)
+                               ;;   (setq buffer-reverted t))
+                               (dolist (instr instructions)
+                                 (cl-incf total)
+                                 (cl-destructuring-bind (&key overlay-start overlay-end properties)
+                                     instr
+                                   (e--restore-overlay (current-buffer)
+                                                       overlay-start
+                                                       overlay-end properties)
+                                   (cl-incf restored)))))))))
+        (restore-instructions file-alist #'find-file-noselect)
+        (restore-instructions buffer-alist #'get-buffer))
       (when (called-interactively-p 'any)
         (message "Restored %d out of %d Evedel instructions from %s" restored total path)))))
 
@@ -904,9 +924,17 @@ Returns the deleted instruction overlay."
   (eq (overlay-get instruction 'e-directive-status) :processing))
 
 (defun e--directive-empty-p (directive)
-  "Check if DIRECTIVE is empty."
-  (let ((directive-text (overlay-get directive 'e-directive)))
-    (and directive-text (string-empty-p directive-text))))
+  "Check if DIRECTIVE is empty.
+
+A directive is empty if it does not have a body or hints."
+  (let ((subdirectives
+         (cl-remove-if-not #'e--directivep
+                           (e--wholly-contained-instructions (overlay-buffer directive)
+                                                             (overlay-start directive)
+                                                             (overlay-end directive)))))
+    (not (cl-some (lambda (subdir)
+                    (not (string-empty-p (e--directive-text subdir))))
+                  subdirectives))))
 
 (defun e--create-instruction (type)
   "Create or scale an instruction of the given TYPE within the selected region.
@@ -1118,7 +1146,7 @@ If OF-TYPE is non-nil, returns the parent with the given type."
             (/= (overlay-end parent) (overlay-end sub)))))
 
 (cl-defun e--child-instructions (instruction)
-  "Return the child direcct instructions of the given INSTRUCTION overlay."
+  "Return the direct child instructions of the given INSTRUCTION overlay."
   ;; Bodyless instructions cannot have any children.
   (when (e--bodyless-instruction-p instruction)
     (cl-return-from e--child-instructions nil))
@@ -1571,7 +1599,7 @@ The PRED must be a function which accepts an instruction."
 
 (defun e--directive-text (directive)
   "Return the directive text of the DIRECTIVE overlay."
-  (overlay-get directive 'e-directive))
+  (or (overlay-get directive 'e-directive) ""))
 
 (defun e--read-directive (directive)
   "Prompt user to enter a directive text via minibuffer for DIRECTIVE."
@@ -1581,11 +1609,7 @@ The PRED must be a function which accepts an instruction."
           (add-hook 'minibuffer-exit-hook
                     (lambda ()
                       (let ((directive-text (minibuffer-contents)))
-                        (if (string-empty-p directive-text)
-                            (if (string-empty-p original-directive-text)
-                                (e--delete-instruction directive)
-                              (overlay-put directive 'e-directive original-directive-text))
-                          (overlay-put directive 'e-directive directive-text))
+                        (overlay-put directive 'e-directive directive-text)
                         (e--update-instruction-overlay directive)))
                     nil t)
           (add-hook 'after-change-functions
@@ -1708,6 +1732,8 @@ A toplevel reference instruction is one that has no parents."
   "Craft the prompt for the LLM model associated with the DIRECTIVE.
 
 Returns the prompt as a string."
+  (when (e--directive-empty-p directive)
+    (error "Directive %s is empty" directive))
   (let* ((is-programmer (derived-mode-p 'prog-mode))
          (query (overlay-get directive 'e-directive-prefix-tag-query))
          (pred (lambda (instr)
@@ -1732,6 +1758,7 @@ Returns the prompt as a string."
                                                                     (overlay-start y)))))
                                              (cl-return alist))))
          (reference-count (length toplevel-references))
+         (toplevel-directive-is-empty (string-empty-p (e--directive-text directive)))
          (directive-toplevel-reference (e--topmost-instruction directive :reference pred))
          (directive-buffer (overlay-buffer directive))
          ;; Should the directive buffer have a valid file path, we should use a relative path for
@@ -1784,9 +1811,13 @@ directive, so be mindful not to return anything superflous that surrounds it."))
                                     directive-region-string
                                     markdown-delimiter))))
                        "\n\n"
-                       (format "The directive is:\n\n%s"
-                               (e--markdown-enquote (overlay-get directive 'e-directive)))
+                       (if (not toplevel-directive-is-empty)
+                           (format "The directive is:\n\n%s"
+                                   (e--markdown-enquote (overlay-get directive 'e-directive)))
+                         "The directive is composed entirely of hints, so you should treat them as \
+subdirectives.")
                        (cl-loop for hint in directive-hints
+                                when (not (string-empty-p (e--directive-text hint)))
                                 concat (concat
                                         "\n\n"
                                         (cl-destructuring-bind (hint-region-info _)
@@ -1869,6 +1900,24 @@ discrepancy."
                      "\n\n"
                      (response-directive-guide-text))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
+
+;; (defun e--diff-patching-sequence (diff-buffer)
+;;   "Get a list of Emacs actions that is equivalent to the diff in DIFF-BUFFER."
+;;   (with-current-buffer diff-buffer
+;;     (let ((patches '()))
+      
+
+(defun e--apply-diff-patching-sequence (patch-list target-buffer)
+  ;; TODO: Implement
+  )
+  
+(defun e--diff-and-patch-buffers (from to)
+  "Patch buffer FROM to buffer TO."
+  (with-temp-buffer
+    (delete-region (point-min) (point-max))
+    (diff-no-select from to nil t (current-buffer))
+    (let ((patches (e--diff-patching-sequence (current-buffer))))
+      (e--apply-diff-patching-sequence patches from))))
 
 (provide 'evedel)
 
