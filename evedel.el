@@ -33,6 +33,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'ediff)
 (require 'gptel)
 
 (defgroup evedel nil
@@ -1900,24 +1901,48 @@ discrepancy."
                      "\n\n"
                      (response-directive-guide-text))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
+        
+(defun e--wordwise-diff-patch-buffers (old new)
+  "Wordwise patch buffer OLD to be equivalent to buffer NEW via `ediff-buffers'.
 
-;; (defun e--diff-patching-sequence (diff-buffer)
-;;   "Get a list of Emacs actions that is equivalent to the diff in DIFF-BUFFER."
-;;   (with-current-buffer diff-buffer
-;;     (let ((patches '()))
-      
-
-(defun e--apply-diff-patching-sequence (patch-list target-buffer)
-  ;; TODO: Implement
-  )
-  
-(defun e--diff-and-patch-buffers (from to)
-  "Patch buffer FROM to buffer TO."
-  (with-temp-buffer
-    (delete-region (point-min) (point-max))
-    (diff-no-select from to nil t (current-buffer))
-    (let ((patches (e--diff-patching-sequence (current-buffer))))
-      (e--apply-diff-patching-sequence patches from))))
+This is mostly a brittle hack meant to make Ediff be used noninteractively."
+  (cl-labels ((apply-all-diffs ()
+                (ediff-next-difference)
+                (while (ediff-valid-difference-p)
+                  (ediff-copy-B-to-A nil)
+                  (ediff-next-difference))))
+    (let ((orig-window-config (current-window-configuration)))
+      (unwind-protect
+          (progn
+            (let ((old-region (with-current-buffer old
+                                (cons (point-min) (point-max))))
+                  (new-region (with-current-buffer new
+                                (cons (point-min) (point-max)))))
+              ;; The following two bindings prevent Ediff from creating a new window.
+              (let ((ediff-window-setup-function 'ediff-setup-windows-plain)
+                    (ediff-split-window-function 'split-window-horizontally))
+                ;; Run wordwise diff first to replace with higher granularity.
+                (ediff-regions-internal old
+                                        (car old-region)
+                                        (cdr old-region)
+                                        new
+                                        (car new-region)
+                                        (cdr new-region)
+                                        nil
+                                        (gensym "ediff-")
+                                        t
+                                        nil)
+                (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+                  ;; This is very brittle.
+                  (with-current-buffer (get-buffer "*Ediff Control Panel*")
+                    (apply-all-diffs)
+                    (ediff-quit t))
+                  ;; Run regular diff to also replace empty newlines.
+                  (ediff-buffers old new)
+                  (with-current-buffer (get-buffer "*Ediff Control Panel*")
+                    (apply-all-diffs)
+                    (ediff-quit t))))))
+        (set-window-configuration orig-window-config)))))
 
 (provide 'evedel)
 
