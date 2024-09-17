@@ -33,6 +33,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'ediff)
 (require 'gptel)
 
 (defgroup evedel nil
@@ -98,6 +99,11 @@ references, ensuring comprehensive coverage.  Conversely, when set to nil,
 untagged references are ignored, unless `evedel-empty-tag-query-matches-all'
 is set to t."
   :type 'boolean)
+
+(defcustom e-patch-outdated-instructions t
+  "Automatically patch instructions when the save file is outdated if non-nil."
+  :type 'boolean
+  :group 'evedel)
 
 (defcustom e-descriptive-mode-roles
   '((emacs-lisp-mode . "an Emacs Lisp programmer")
@@ -215,8 +221,17 @@ handles all the internal bookkeeping and cleanup."
     (unless (and (listp file-alist) (listp buffer-alist))
       (user-error "Malformed Evedel instruction list"))
     (e-delete-all-instructions)
-    (let ((restored 0)
-          (total 0))
+    (let ((total-restored 0)
+          (total-kia 0)
+          (total
+           (cl-labels
+               ((count-total-instrs (source)
+                  (cl-loop for (_ . plist) in source
+                           with instr-count = 0
+                           do (cl-incf instr-count (length (plist-get plist :instructions)))
+                           finally (cl-return instr-count))))
+             (+ (count-total-instrs buffer-alist)
+                (count-total-instrs file-alist)))))
       (cl-labels
           ((restore-instructions (container get-buffer-fn)
              (cl-loop for container-cons in container
@@ -224,30 +239,56 @@ handles all the internal bookkeeping and cleanup."
                                (instructions (plist-get (cdr container-cons)
                                                         :instructions))
                                (original-content (plist-get (cdr container-cons)
-                                                            :original-content))
-                               (buffer-reverted nil))
+                                                            :original-content)))
                            (with-current-buffer (funcall get-buffer-fn name)
                              (let ((current-content (buffer-substring-no-properties (point-min)
                                                                                     (point-max))))
-                               ;; TODO implement
-                               ;; (unless (equal current-content original-content)
-                               ;;   ;; Restore the current buffer to its original form in order to
-                               ;;   ;; correctly apply the instructions.
-                               ;;   (erase-buffer)
-                               ;;   (insert original-content)
-                               ;;   (setq buffer-reverted t))
-                               (dolist (instr instructions)
-                                 (cl-incf total)
-                                 (cl-destructuring-bind (&key overlay-start overlay-end properties)
-                                     instr
-                                   (e--restore-overlay (current-buffer)
-                                                       overlay-start
-                                                       overlay-end properties)
-                                   (cl-incf restored)))))))))
+                               ;; The tmpbuf value here will indicate whether or not we have a new
+                               ;; buffer to patch to.  If it is nil, then it means we do not need
+                               ;; to do any patching.
+                               (let (tmpbuf)
+                                 (unwind-protect
+                                     (progn
+                                       (when (and e-patch-outdated-instructions
+                                                  (not (equal current-content original-content)))
+                                         (message "Patching outdated instructions...")
+                                         (setq tmpbuf (generate-new-buffer (symbol-name (gensym))))
+                                         (delete-region (point-min) (point-max))
+                                         (insert original-content)
+                                         (with-current-buffer tmpbuf
+                                           (insert current-content)))
+                                       (dolist (instr instructions)
+                                         (cl-destructuring-bind (&key overlay-start
+                                                                      overlay-end
+                                                                      properties)
+                                             instr
+                                           (e--restore-overlay (current-buffer)
+                                                               overlay-start
+                                                               overlay-end properties)))
+                                       (when tmpbuf ; tmpbuf? Then patch.
+                                         (e--wordwise-diff-patch-buffers (current-buffer) tmpbuf))
+                                       (let* ((restored (length (e--instructions-in (point-min)
+                                                                                    (point-max))))
+                                              (kia (- (length instructions) restored)))
+                                         (cl-incf total-restored restored)
+                                         (unless (zerop kia)
+                                           (message "%d instruction%s lost to patching in %s"
+                                                    kia
+                                                    (if (= 1 kia) "" "s")
+                                                    (current-buffer))
+                                           (cl-incf total-kia kia))))
+                                   (when tmpbuf
+                                     (kill-buffer tmpbuf))))))))))
         (restore-instructions file-alist #'find-file-noselect)
         (restore-instructions buffer-alist #'get-buffer))
       (when (called-interactively-p 'any)
-        (message "Restored %d out of %d Evedel instructions from %s" restored total path)))))
+        (message "Restored %d out of %d Evedel instructions from %s%s"
+                 total-restored
+                 total
+                 path
+                 (if (not (zerop total-kia))
+                     (format ", with %d lost to patching" total-kia)
+                   ""))))))
 
 ;;;###autoload
 (defun e-instruction-count ()
@@ -1900,24 +1941,51 @@ discrepancy."
                      "\n\n"
                      (response-directive-guide-text))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
+        
+(defun e--wordwise-diff-patch-buffers (old new)
+  "Wordwise patch buffer OLD to be equivalent to buffer NEW via `ediff-buffers'.
 
-;; (defun e--diff-patching-sequence (diff-buffer)
-;;   "Get a list of Emacs actions that is equivalent to the diff in DIFF-BUFFER."
-;;   (with-current-buffer diff-buffer
-;;     (let ((patches '()))
-      
-
-(defun e--apply-diff-patching-sequence (patch-list target-buffer)
-  ;; TODO: Implement
-  )
-  
-(defun e--diff-and-patch-buffers (from to)
-  "Patch buffer FROM to buffer TO."
-  (with-temp-buffer
-    (delete-region (point-min) (point-max))
-    (diff-no-select from to nil t (current-buffer))
-    (let ((patches (e--diff-patching-sequence (current-buffer))))
-      (e--apply-diff-patching-sequence patches from))))
+This is mostly a brittle hack meant to make Ediff be used noninteractively."
+  (cl-labels ((apply-all-diffs ()
+                (ediff-next-difference)
+                (while (ediff-valid-difference-p)
+                  (ediff-copy-B-to-A nil)
+                  (ediff-next-difference))))
+    (let ((orig-window-config (current-window-configuration)))
+      (unwind-protect
+          (progn
+            (let ((old-region (with-current-buffer old
+                                (cons (point-min) (point-max))))
+                  (new-region (with-current-buffer new
+                                (cons (point-min) (point-max)))))
+              ;; The following two bindings prevent Ediff from creating a new window.
+              (let ((ediff-window-setup-function 'ediff-setup-windows-plain)
+                    (ediff-split-window-function 'split-window-horizontally))
+                ;; Run wordwise diff first to replace with higher granularity.
+                (let ((inhibit-message t))
+                  ;; Prevent Ediff from polluting the messages buffer.
+                  (cl-letf (((symbol-function 'message) (lambda (&rest _)) t))
+                    (ediff-regions-internal old
+                                            (car old-region)
+                                            (cdr old-region)
+                                            new
+                                            (car new-region)
+                                            (cdr new-region)
+                                            nil
+                                            (gensym "ediff-")
+                                            t
+                                            nil)
+                    (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+                      ;; This is very brittle.
+                      (with-current-buffer (get-buffer "*Ediff Control Panel*")
+                        (apply-all-diffs)
+                        (ediff-quit t))
+                      ;; Run regular diff to also replace empty newlines.
+                      (ediff-buffers old new)
+                      (with-current-buffer (get-buffer "*Ediff Control Panel*")
+                        (apply-all-diffs)
+                        (ediff-quit t))))))))
+        (set-window-configuration orig-window-config)))))
 
 (provide 'evedel)
 
