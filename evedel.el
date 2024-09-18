@@ -100,6 +100,11 @@ untagged references are ignored, unless `evedel-empty-tag-query-matches-all'
 is set to t."
   :type 'boolean)
 
+(defcustom e-patch-outdated-instructions t
+  "Automatically patch instructions when the save file is outdated if non-nil."
+  :type 'boolean
+  :group 'evedel)
+
 (defcustom e-descriptive-mode-roles
   '((emacs-lisp-mode . "an Emacs Lisp programmer")
     (js-mode         . "a JavaScript programmer")
@@ -244,7 +249,8 @@ handles all the internal bookkeeping and cleanup."
                                (let (tmpbuf)
                                  (unwind-protect
                                      (progn
-                                       (unless (equal current-content original-content)
+                                       (when (and e-patch-outdated-instructions
+                                                  (not (equal current-content original-content)))
                                          (message "Patching outdated instructions...")
                                          (setq tmpbuf (generate-new-buffer (symbol-name (gensym))))
                                          (delete-region (point-min) (point-max))
