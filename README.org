@@ -1,4 +1,4 @@
-* Evedel  : Instructed LLM Programmer/Assistant
+* Evedel: Instructed LLM Programmer/Assistant
 
 #+begin_quote
 [!WARNING]
@@ -119,6 +119,8 @@ You can also modify the tag query for a directive, which is a way to filter and 
 
 *** Customization
 
+**** Colors
+
 |-------------------------------------------+---------------------------------------------------|
 | Custom Variable                           | Description                                       |
 |-------------------------------------------+---------------------------------------------------|
@@ -130,16 +132,18 @@ You can also modify the tag query for a directive, which is a way to filter and 
 | =evedel-instruction-bg-tint-intensity=    | Intensity for instruction background tint         |
 | =evedel-instruction-label-tint-intensity= | Intensity for instruction label tint              |
 | =evedel-subinstruction-tint-intensity=    | Coefficient for adjusting subinstruction tints    |
-| =evedel-descriptive-mode-roles=           | Major modes to model roles association list       |
 |-------------------------------------------+---------------------------------------------------|
 
-Please refer to the custom variable documentation within the package for a more comprehensive description.
+**** Miscellaneous
 
-*** Instruction Persistence
+|--------------------------------------+------------------------------------------------------------------|
+| Custom Variable                      | Description                                                      |
+|--------------------------------------+------------------------------------------------------------------|
+| =evedel-descriptive-mode-roles=      | Alist mapping major modes to model roles association list        |
+| =evedel-patch-outdated-instructions= | Automatically patch instructions when the save file is outdated. |
+|--------------------------------------+------------------------------------------------------------------|
 
-If you have added instructions to your files and saved them, make sure to load them before resuming work on your project. Failing to do so, and loading them after making changes to your files, will lead to mismatched instruction overlays.
-
-Frequently save your instructions, and keep a version of instructions for every branch. Something not brittle is planned to alleviate this in the future.
+The variable =evedel-patch-outdated-instructions= controls the automatic patching of instructions during loading when the save file is outdated. The process is not perfect (word-wise diff), so you should always try and maintain a separate instruction file per branch.
 
 ** Setup
 
@@ -199,10 +203,12 @@ Mark indicates previously planned features that have been implemented.
 *** Interface
 
 - [ ] Auto-saving/loading
-- [ ] Persistence with version controls, e.g. switching branches should not mess up the instructions.
+- *[X] Persistence with version controls, e.g. switching branches should not mess up the instructions [1].*
 - [ ] Preservation of sub-instructions returned as part of a successful directive
 - [ ] Instruction undoing/redoing history
 - [ ] Better/more precise instruction selection resolution for tightly nested instructions
+
+[1] While the current patching is able to fix outdated instructions pretty accurately, it is still a better idea to maintain a separate save file for each branch. This feature solves the problem where even the most minor change in the file completely broke the overlay structure.
 
 *** Documentation
   
@@ -214,4 +220,4 @@ Mark indicates previously planned features that have been implemented.
 - Special thanks to [[https://github.com/karthink][Karthik Chikmagalur]] for the excellent [[https://github.com/karthink/gptel][gptel]] package
 
 #  LocalWords:  LLM Evedel DWIM Evedel's gptel evedel backend untagged autocomplete autocompletion
-#  LocalWords:  LLMs
+#  LocalWords:  LLMs VC
