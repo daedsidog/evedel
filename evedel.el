@@ -265,7 +265,7 @@ handles all the internal bookkeeping and cleanup."
                                                                                     (point-max))))
                                               (kia (- (length instructions) restored)))
                                          (cl-incf total-restored restored)
-                                         (when kia
+                                         (unless (zerop kia)
                                            (message "%d instruction%s lost to patching in %s"
                                                     kia
                                                     (if (= 1 kia) "" "s")
@@ -283,7 +283,6 @@ handles all the internal bookkeeping and cleanup."
                  (if (not (zerop total-kia))
                      (format ", with %d lost to patching" total-kia)
                    ""))))))
-        
 
 ;;;###autoload
 (defun e-instruction-count ()
@@ -1957,26 +1956,29 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
               (let ((ediff-window-setup-function 'ediff-setup-windows-plain)
                     (ediff-split-window-function 'split-window-horizontally))
                 ;; Run wordwise diff first to replace with higher granularity.
-                (ediff-regions-internal old
-                                        (car old-region)
-                                        (cdr old-region)
-                                        new
-                                        (car new-region)
-                                        (cdr new-region)
-                                        nil
-                                        (gensym "ediff-")
-                                        t
-                                        nil)
-                (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
-                  ;; This is very brittle.
-                  (with-current-buffer (get-buffer "*Ediff Control Panel*")
-                    (apply-all-diffs)
-                    (ediff-quit t))
-                  ;; Run regular diff to also replace empty newlines.
-                  (ediff-buffers old new)
-                  (with-current-buffer (get-buffer "*Ediff Control Panel*")
-                    (apply-all-diffs)
-                    (ediff-quit t))))))
+                (let ((inhibit-message t))
+                  ;; Prevent Ediff from polluting the messages buffer.
+                  (cl-letf (((symbol-function 'message) (lambda (&rest _)) t))
+                    (ediff-regions-internal old
+                                            (car old-region)
+                                            (cdr old-region)
+                                            new
+                                            (car new-region)
+                                            (cdr new-region)
+                                            nil
+                                            (gensym "ediff-")
+                                            t
+                                            nil)
+                    (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+                      ;; This is very brittle.
+                      (with-current-buffer (get-buffer "*Ediff Control Panel*")
+                        (apply-all-diffs)
+                        (ediff-quit t))
+                      ;; Run regular diff to also replace empty newlines.
+                      (ediff-buffers old new)
+                      (with-current-buffer (get-buffer "*Ediff Control Panel*")
+                        (apply-all-diffs)
+                        (ediff-quit t))))))))
         (set-window-configuration orig-window-config)))))
 
 (provide 'evedel)
