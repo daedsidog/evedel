@@ -80,7 +80,9 @@
   "Coeffecient multiplied by by tint intensities.
 
 Only applicable to the subinstructions. Makes it possible to have more a
-more finely-tuned control over how tinting looks."
+more finely-tuned control over how tinting looks.
+
+Does not affect the label colors, just the backgrounds."
   :type 'float)
 
 (defcustom e-empty-tag-query-matches-all t
@@ -1447,29 +1449,35 @@ non-nil."
                           (setq label (concat label "\n" padding matchinfo)))))))))
              (let* ((default-fg (face-foreground 'default))
                     (default-bg (face-background 'default))
-                    (parent-label-color
-                     (if (and parent (not parent-bufferlevel))
-                         (overlay-get parent 'e-label-color)
-                       default-fg))
-                    (parent-bg-color
-                     (if parent (overlay-get parent 'e-bg-color) default-bg))
-                    (label-tint-intensity
-                     (if (and parent (not parent-bufferlevel))
-                         (* e-subinstruction-tint-coefficient e-instruction-label-tint-intensity)
-                       e-instruction-label-tint-intensity))
                     (bg-tint-intensity
                      (if (and parent (not parent-bufferlevel))
                          (* e-subinstruction-tint-coefficient e-instruction-bg-tint-intensity)
                        e-instruction-bg-tint-intensity))
-                    (label-color (e--tint parent-label-color color label-tint-intensity))
+                    (label-color (if is-bufferlevel
+                                     (e--tint default-fg color e-instruction-label-tint-intensity)
+                                   (let ((tint (e--tint default-fg
+                                                        color
+                                                        e-instruction-label-tint-intensity)))
+                                     (dotimes (_  (- priority
+                                                     e--default-instruction-priority))
+                                       (setq tint (e--tint tint
+                                                           color
+                                                           e-instruction-label-tint-intensity)))
+                                     tint)))
+                    ;; We want to make sure that the buffer-level instructions don't superfluously
+                    ;; tint the background.
                     (bg-color (if is-bufferlevel
                                   default-bg
-                                (e--tint parent-bg-color color bg-tint-intensity))))
-               ;; Here, we want to make sure that the buffer-level instructions don't superfluously
-               ;; tint the background.
+                                (let ((tint (e--tint default-bg
+                                                     color
+                                                     e-instruction-bg-tint-intensity)))
+                                  (dotimes (_ (- priority
+                                                 e--default-instruction-priority))
+                                    (setq tint (e--tint tint color bg-tint-intensity)))
+                                  tint))))
                (overlay-put instruction 'e-bg-color bg-color)
                (overlay-put instruction 'e-label-color label-color)
-               (overlay-put instruction 'priority priority)
+               (overlay-put instruction 'priority (if is-bufferlevel (1- priority) priority))
                (when (eq instruction
                          e--highlighted-instruction)
                  (setq bg-color
@@ -1961,10 +1969,10 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
               ;; The following two bindings prevent Ediff from creating a new window.
               (let ((ediff-window-setup-function 'ediff-setup-windows-plain)
                     (ediff-split-window-function 'split-window-horizontally))
-                ;; Run wordwise diff first to replace with higher granularity.
                 (let ((inhibit-message t))
                   ;; Prevent Ediff from polluting the messages buffer.
                   (cl-letf (((symbol-function 'message) (lambda (&rest _)) t))
+                    ;; Run wordwise diff first to replace with higher granularity.
                     (ediff-regions-internal old
                                             (car old-region)
                                             (cdr old-region)
