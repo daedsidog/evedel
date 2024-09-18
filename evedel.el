@@ -216,8 +216,17 @@ handles all the internal bookkeeping and cleanup."
     (unless (and (listp file-alist) (listp buffer-alist))
       (user-error "Malformed Evedel instruction list"))
     (e-delete-all-instructions)
-    (let ((restored 0)
-          (total 0))
+    (let ((total-restored 0)
+          (total-kia 0)
+          (total
+           (cl-labels
+               ((count-total-instrs (source)
+                  (cl-loop for (_ . plist) in source
+                           with instr-count = 0
+                           do (cl-incf instr-count (length (plist-get plist :instructions)))
+                           finally (cl-return instr-count))))
+             (+ (count-total-instrs buffer-alist)
+                (count-total-instrs file-alist)))))
       (cl-labels
           ((restore-instructions (container get-buffer-fn)
              (cl-loop for container-cons in container
@@ -225,30 +234,56 @@ handles all the internal bookkeeping and cleanup."
                                (instructions (plist-get (cdr container-cons)
                                                         :instructions))
                                (original-content (plist-get (cdr container-cons)
-                                                            :original-content))
-                               (buffer-reverted nil))
+                                                            :original-content)))
                            (with-current-buffer (funcall get-buffer-fn name)
                              (let ((current-content (buffer-substring-no-properties (point-min)
                                                                                     (point-max))))
-                               ;; TODO implement
-                               ;; (unless (equal current-content original-content)
-                               ;;   ;; Restore the current buffer to its original form in order to
-                               ;;   ;; correctly apply the instructions.
-                               ;;   (erase-buffer)
-                               ;;   (insert original-content)
-                               ;;   (setq buffer-reverted t))
-                               (dolist (instr instructions)
-                                 (cl-incf total)
-                                 (cl-destructuring-bind (&key overlay-start overlay-end properties)
-                                     instr
-                                   (e--restore-overlay (current-buffer)
-                                                       overlay-start
-                                                       overlay-end properties)
-                                   (cl-incf restored)))))))))
+                               ;; The tmpbuf value here will indicate whether or not we have a new
+                               ;; buffer to patch to.  If it is nil, then it means we do not need
+                               ;; to do any patching.
+                               (let (tmpbuf)
+                                 (unwind-protect
+                                     (progn
+                                       (unless (equal current-content original-content)
+                                         (message "Patching outdated instructions...")
+                                         (setq tmpbuf (generate-new-buffer (symbol-name (gensym))))
+                                         (delete-region (point-min) (point-max))
+                                         (insert original-content)
+                                         (with-current-buffer tmpbuf
+                                           (insert current-content)))
+                                       (dolist (instr instructions)
+                                         (cl-destructuring-bind (&key overlay-start
+                                                                      overlay-end
+                                                                      properties)
+                                             instr
+                                           (e--restore-overlay (current-buffer)
+                                                               overlay-start
+                                                               overlay-end properties)))
+                                       (when tmpbuf ; tmpbuf? Then patch.
+                                         (e--wordwise-diff-patch-buffers (current-buffer) tmpbuf))
+                                       (let* ((restored (length (e--instructions-in (point-min)
+                                                                                    (point-max))))
+                                              (kia (- (length instructions) restored)))
+                                         (cl-incf total-restored restored)
+                                         (when kia
+                                           (message "%d instruction%s lost to patching in %s"
+                                                    kia
+                                                    (if (= 1 kia) "" "s")
+                                                    (current-buffer))
+                                           (cl-incf total-kia kia))))
+                                   (when tmpbuf
+                                     (kill-buffer tmpbuf))))))))))
         (restore-instructions file-alist #'find-file-noselect)
         (restore-instructions buffer-alist #'get-buffer))
       (when (called-interactively-p 'any)
-        (message "Restored %d out of %d Evedel instructions from %s" restored total path)))))
+        (message "Restored %d out of %d Evedel instructions from %s%s"
+                 total-restored
+                 total
+                 path
+                 (if (not (zerop total-kia))
+                     (format ", with %d lost to patching" total-kia)
+                   ""))))))
+        
 
 ;;;###autoload
 (defun e-instruction-count ()
