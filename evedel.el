@@ -729,7 +729,7 @@ Adds specificly to REFERENCE if it is non-nil."
              type-string)))
 
 (cl-defun e--reference-matches-query-p (reference query)
-  "Returns t only if REFERENCES matches the tag QUERY."
+  "Return t only if REFERENCES matches the tag QUERY."
   (unless reference
     (cl-return-from e--reference-matches-query-p nil))
   (let ((atoms (cl-remove-duplicates (cl-remove-if (lambda (elm)
@@ -741,9 +741,16 @@ Adds specificly to REFERENCE if it is non-nil."
         (if (and (null tags) e-always-match-untagged-references)
             t
           (let ((atom-bindings (mapcar (lambda (atom)
-                                         (if (member atom tags)
-                                             t
-                                           nil))
+                                         (pcase atom
+                                           ('is:bufferlevel
+                                            (e--instruction-bufferlevel-p reference))
+                                           ('is:subreference
+                                            (e--parent-instruction reference :reference))
+                                           ('is:tagless
+                                            (null tags))
+                                           ('is:directly-tagless
+                                            (null (e--reference-tags reference nil)))
+                                           (_ (member atom tags))))
                                        atoms)))
             (cl-progv atoms atom-bindings
               (eval query))))))))
