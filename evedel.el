@@ -1384,39 +1384,43 @@ non-nil."
                  (parent-bufferlevel (and parent (e--instruction-bufferlevel-p parent)))
                  (label "")
                  color)
-             (pcase instruction-type
-               (:reference ; REFERENCE
-                (setq color e-reference-color)
-                (if (and parent
-                         (and (eq (e--instruction-type parent) :reference)
-                              (not parent-bufferlevel)))
-                    (setq label "SUBREFERENCE")
-                  (if is-bufferlevel
-                      (setq label "BUFFER REFERENCE")
-                    (setq label "REFERENCE")))
-                (when-let ((tags (sort (e--reference-tags instruction)
-                                       #'string-lessp)))
-                  (setq label (concat
-                               label
-                               "\n"
-                               padding
-                               (e--fill-label-string (propertized-string-from-tags tags)
-                                                     "TAGS: "
-                                                     padding
-                                                     (overlay-buffer instruction))))))
+             (cl-labels
+                 ((append-to-label (content &optional prefix)
+                    (setq label
+                          (concat label
+                                  (if (string-empty-p label) "" (concat "\n" padding))
+                                  (e--fill-label-string content
+                                                        (or prefix "")
+                                                        padding
+                                                        (overlay-buffer instruction))))))
+               (pcase instruction-type
+                 (:reference ; REFERENCE
+                  (setq color e-reference-color)
+                  (if (and parent
+                           (and (eq (e--instruction-type parent) :reference)
+                                (not parent-bufferlevel)))
+                      (append-to-label "SUBREFERENCE")
+                    (if is-bufferlevel
+                        (append-to-label "BUFFER REFERENCE")
+                      (append-to-label "REFERENCE")))
+                  (let ((tags (sort (e--reference-tags instruction t) #'string-lessp))
+                        (direct-tags (sort (e--reference-tags instruction) #'string-lessp)))
+                    (when tags
+                      (when-let ((inherited-tags (cl-nset-difference tags direct-tags)))
+                        (append-to-label (propertized-string-from-tags inherited-tags)
+                                         "INHERITED TAGS: "))
+                      (when direct-tags
+                        (append-to-label (propertized-string-from-tags direct-tags) "TAGS: ")))))
                (:directive ; DIRECTIVE
                 (when (and (null topmost-directive) (overlay-get instruction
                                                                  'e-directive-status))
                   (setq topmost-directive instruction))
                 (pcase (overlay-get instruction 'e-directive-status)
-                  (:processing (setq label "PROCESSING"))
-                  (:succeeded (setq label "SUCCEEDED"))
-                  (:failed
-                   (setq label (concat
-                                (e--fill-label-string (overlay-get instruction
-                                                                   'e-directive-fail-reason)
-                                                      "FAILED: "
-                                                      (overlay-buffer instruction))))))
+                  (:processing (append-to-label "PROCESSING"))
+                  (:succeeded (append-to-label "SUCCEEDED"))
+                  (:failed (append-to-label (overlay-get instruction
+                                                         'e-directive-fail-reason)
+                                            "FAILED: ")))
                 (setq color (directive-color instruction))
                 (let (sublabel)
                   (if (and parent
@@ -1439,14 +1443,7 @@ non-nil."
                     (unless (e--parent-instruction instruction :directive)
                       (if-let ((query-string (overlay-get instruction
                                                           'e-directive-infix-tag-query-string)))
-                          (setq label (concat
-                                       label
-                                       "\n"
-                                       padding
-                                       (e--fill-label-string query-string
-                                                             "TAG QUERY: "
-                                                             padding
-                                                             (overlay-buffer instruction))))
+                          (append-to-label query-string "TAG QUERY: ")
                         (let (matchinfo)
                           (if e-empty-tag-query-matches-all
                               (setq matchinfo "REFERENCES ALL")
@@ -1550,7 +1547,7 @@ non-nil."
                (overlay-put instruction 'face `(:extend t :background ,bg-color)))
            (when update-children
              (dolist (child (e--child-instructions instruction))
-               (aux child update-children (1+ priority) instruction))))))
+               (aux child update-children (1+ priority) instruction)))))))
       (let ((instructions-conflicting (cl-some (lambda (instr)
                                                  (and (not (eq instr instruction))
                                                       (e--instructions-congruent-p instruction
