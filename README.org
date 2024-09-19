@@ -2,12 +2,12 @@
 
 #+begin_quote
 [!WARNING]
-*This is a fledgling project. Expect lots of bugs and missing features.*
+*This is a fledgling project. Expect bugs, missing features, and API instability.*
 #+end_quote
 
 [[file:media/promo.png]]
 
-Evedel is an extension to the [[https://github.com/karthink/gptel][gptel]] adds a new workflow of interacting with LLMs during programming. Its primary aim is to shift workload from manually writing code to creating detailed, thoughtful instruction labels for the models, leveraging references to provide contextual understanding of the working environment.
+Evedel is an Emacs package that adds a workflow for interacting with LLMs during programming. Its primary goal is to shift workload from manually writing code to creating detailed, thoughtful instruction annotations in the source files for LLM models, leveraging them as indexed references to provide them with contextual understanding of the working environment.
 
 Evedel is versatile enough so that it can be utilized in various types of buffers, and isn't limited to just programming buffers.
 
@@ -105,6 +105,12 @@ Here's an example of previewing a directive prompt:
 The categorization system in allows you to use tags to label and organize references. You can add or remove tags to a reference using the commands =evedel-add-tags= and =evedel-remove-tags=. Each tag is a symbolic label that helps identify the nature or purpose of the reference.
 
 You can also modify the tag query for a directive, which is a way to filter and search for references by tags. The tag query uses an infix notation system, allowing complex expressions with the operators =and=, =or=, and =not=. For example, the query =signature and function and doc= means the directive should match references tagged with =signature=, =function=, and =doc=. You may use parentheses in these expressions.
+
+Additionally, there are special meta tag symbols that have exclusive meanings:
+- =is:bufferlevel=: Returns only references that contain the entire buffer.
+- =is:tagless=: Returns references with no tags whatsoever.
+- =is:directly-tagless=: Returns references which may have inherited tags, but no tags of their own.
+- =is:subreference=: Returns references which have another reference as their parent.
 
 |-------------------------------------------+------------------------------------------------------|
 | Custom Variable                           | Description                                          |
