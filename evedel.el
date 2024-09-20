@@ -1711,7 +1711,7 @@ Returns the message as a string."
 (defun e::overlay-region-info (overlay)
   "Return region span information of OVERLAY in its buffer.
 
-Returns two values, first being the region line & column span string in the
+Returns three values, first being the region line & column span string in the
 buffer, and the second being the content of the span itself."
   (let ((beg (overlay-start overlay))
         (end (overlay-end overlay)))
@@ -1775,6 +1775,10 @@ A toplevel reference instruction is one that has no parents."
                 (and (null (e::parent-instruction instr))
                      (e::referencep instr)))
               (e::instructions)))
+
+(defun e::multiline-string-p (str)
+  "Check if STR contains multiple lines."
+  (string-match-p "\n" str))
 
 (defun e::markdown-enquote (input-string)
   "Add Markdown blockquote to each line in INPUT-STRING."
@@ -1857,7 +1861,8 @@ directive, so be mindful not to return anything superflous that surrounds it."))
                          (let ((markdown-delimiter
                                 (e::delimiting-markdown-backticks directive-region-string)))
                            (concat
-                            ", which correspond to:"
+                            (format ", which correspond%s to:"
+                                    (if (e::multiline-string-p directive-region-string) "" "s"))
                             "\n\n"
                             (format "%s\n%s\n%s"
                                     markdown-delimiter
@@ -1873,12 +1878,29 @@ subdirectives.")
                                 when (not (string-empty-p (e::directive-text hint)))
                                 concat (concat
                                         "\n\n"
-                                        (cl:destructuring-bind (hint-region-info _)
+                                        (cl:destructuring-bind (hint-region-info hint-region)
                                             (e::overlay-region-info hint)
-                                          (format "Hint for %s:\n\n%s"
-                                                  hint-region-info
-                                                  (e::markdown-enquote
-                                                   (overlay-get hint 'e:directive))))))))))
+                                          (concat
+                                           (format "For %s"
+                                                   hint-region-info)
+                                           (let ((hint-text (e::markdown-enquote
+                                                             (overlay-get hint 'e:directive))))
+                                             (if (e::bodyless-instruction-p hint)
+                                                 (format ", you have a hint:\n\n%s"
+                                                         hint-text)
+                                               (let ((markdown-delimiter
+                                                      (e::delimiting-markdown-backticks
+                                                       hint-region)))
+                                                 (concat
+                                                  (format ", which correspond%s to:\n\n%s"
+                                                          (if (e::multiline-string-p hint-region)
+                                                              "" "s")
+                                                          (format "%s\n%s\n%s"
+                                                                  markdown-delimiter
+                                                                  hint-region
+                                                                  markdown-delimiter))
+                                                  (format "\n\nYou have the hint:\n\n%s"
+                                                          hint-text)))))))))))))
         (with-temp-buffer
           (insert
            (concat
