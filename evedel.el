@@ -371,10 +371,9 @@ overlap to the point where no other reasonable option is available."
 (defun e:modify-directive ()
   "Modify the directive under the point."
   (interactive)
-  (when-let ((directive (e::highest-priority-instruction (e::instructions-at (point) :directive)
-                                                         t)))
+  (when-let ((directive (e::highest-priority-instruction (e::instructions-at (point)) :directive)))
     (when (eq (overlay-get directive 'e:directive-status) :processing)
-      (user-error "Cannot modify a directive that is being processed"))
+      (overlay-put directive 'e:directive-status nil))
     (e::read-directive directive)))
 
 (defun e:process-directives ()
@@ -611,7 +610,9 @@ Examples:
   (cat or dog or (sheep and black))
   ((cat and dog) or (dog and goose))"
   (interactive)
-  (let ((directive (e::highest-priority-instruction (e::instructions-at (point) :directive) t)))
+  (let ((directive (e::topmost-instruction
+                    (e::highest-priority-instruction (e::instructions-at (point)) t)
+                    :directive)))
     (e::read-directive-tag-query directive)))
 
 (defun e:add-tags (&optional reference)
@@ -1058,6 +1059,9 @@ the current buffer."
   (let ((directive (plist-get info :context)))
     (unless (overlay-buffer directive)
       ;; Directive is gone...
+      (cl:return-from e::process-directive-llm-response))
+    (unless (eq (overlay-get directive 'e:directive-status) :processing)
+      ;; The directive has been modified.  Do not continue.
       (cl:return-from e::process-directive-llm-response))
     (cl:flet ((mark-failed (reason)
                 (overlay-put directive 'e:directive-status :failed)
