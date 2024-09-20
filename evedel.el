@@ -371,10 +371,9 @@ overlap to the point where no other reasonable option is available."
 (defun e:modify-directive ()
   "Modify the directive under the point."
   (interactive)
-  (when-let ((directive (e::highest-priority-instruction (e::instructions-at (point) :directive)
-                                                         t)))
+  (when-let ((directive (e::highest-priority-instruction (e::instructions-at (point)) :directive)))
     (when (eq (overlay-get directive 'e:directive-status) :processing)
-      (user-error "Cannot modify a directive that is being processed"))
+      (overlay-put directive 'e:directive-status nil))
     (e::read-directive directive)))
 
 (defun e:process-directives ()
@@ -611,8 +610,11 @@ Examples:
   (cat or dog or (sheep and black))
   ((cat and dog) or (dog and goose))"
   (interactive)
-  (let ((directive (e::highest-priority-instruction (e::instructions-at (point) :directive) t)))
-    (e::read-directive-tag-query directive)))
+  (if-let ((directive (e::topmost-instruction
+                         (e::highest-priority-instruction (e::instructions-at (point)) t)
+                         :directive)))
+      (e::read-directive-tag-query directive)
+    (user-error "No directive at point")))
 
 (defun e:add-tags (&optional reference)
   "Add tags to the reference under the point.
@@ -950,6 +952,11 @@ Returns the number of tags removed."
         (e::update-instruction-overlay reference t))
       removed)))
 
+(defun e::inherited-tags (reference)
+  "Return the list of all tags that REFERENCE inherits from its parents."
+  (when-let ((parent (e::parent-instruction reference :reference)))
+    (e::reference-tags parent t)))
+
 (defun e::reference-tags (reference &optional include-parent-tags)
   "Return the list of tags for the given REFERENCE.
 
@@ -1058,6 +1065,9 @@ the current buffer."
   (let ((directive (plist-get info :context)))
     (unless (overlay-buffer directive)
       ;; Directive is gone...
+      (cl:return-from e::process-directive-llm-response))
+    (unless (eq (overlay-get directive 'e:directive-status) :processing)
+      ;; The directive has been modified.  Do not continue.
       (cl:return-from e::process-directive-llm-response))
     (cl:flet ((mark-failed (reason)
                 (overlay-put directive 'e:directive-status :failed)
@@ -1375,15 +1385,17 @@ non-nil."
            (propertize (string-join (mapcar #'symbol-name tags) " ")
                        'face 'font-lock-constant-face))
          (aux (instruction &optional update-children priority (parent nil))
-           (let ((instruction-type (e::instruction-type instruction))
-                 (padding (with-current-buffer (overlay-buffer instruction)
-                            (save-excursion
-                              (goto-char (overlay-start instruction))
-                              (make-string (current-column) ? ))))
-                 (is-bufferlevel (e::instruction-bufferlevel-p instruction))
-                 (parent-bufferlevel (and parent (e::instruction-bufferlevel-p parent)))
-                 (label "")
-                 color)
+           (let* ((instruction-type (e::instruction-type instruction))
+                  (padding (with-current-buffer (overlay-buffer instruction)
+                             (save-excursion
+                               (goto-char (overlay-start instruction))
+                               (make-string (current-column) ? ))))
+                  (is-bufferlevel (e::instruction-bufferlevel-p instruction))
+                  (parent-bufferlevel (and parent (e::instruction-bufferlevel-p parent)))
+                  ;; This is to prevent the buffer-level instruction from having a background color.
+                  (priority (if is-bufferlevel (1- priority) priority))
+                  (label "")
+                  color)
              (cl:labels
                  ((append-to-label (content &optional prefix)
                     (setq label
@@ -1403,14 +1415,24 @@ non-nil."
                     (if is-bufferlevel
                         (append-to-label "BUFFER REFERENCE")
                       (append-to-label "REFERENCE")))
-                  (let ((tags (sort (e::reference-tags instruction t) #'string-lessp))
-                        (direct-tags (sort (e::reference-tags instruction) #'string-lessp)))
-                    (when tags
-                      (when-let ((inherited-tags (cl:nset-difference tags direct-tags)))
-                        (append-to-label (propertized-string-from-tags inherited-tags)
-                                         "INHERITED TAGS: "))
-                      (when direct-tags
-                        (append-to-label (propertized-string-from-tags direct-tags) "TAGS: ")))))
+                  (let* ((direct-tags (e::reference-tags instruction))
+                         (inherited-tags (e::inherited-tags instruction))
+                         (common-tags (cl:intersection inherited-tags direct-tags))
+                         (unique-tags (cl:set-difference direct-tags common-tags)))
+                    (when inherited-tags
+                      (append-to-label (propertized-string-from-tags
+                                        (sort (append inherited-tags) #'string-lessp))
+                                       (if common-tags
+                                           "INHERITED & COMMON TAGS: "
+                                         "INHERITED TAGS: ")))
+                    (when unique-tags
+                      (append-to-label (propertized-string-from-tags
+                                        (sort unique-tags #'string-lessp))
+                                       (if inherited-tags
+                                           (if common-tags
+                                               "UNIQUE TAGS: "
+                                             "DIRECT TAGS: ")
+                                         "TAGS: ")))))
                (:directive ; DIRECTIVE
                 (when (and (null topmost-directive) (overlay-get instruction
                                                                  'e:directive-status))
@@ -1481,7 +1503,7 @@ non-nil."
                                   tint))))
                (overlay-put instruction 'e:bg-color bg-color)
                (overlay-put instruction 'e:label-color label-color)
-               (overlay-put instruction 'priority (if is-bufferlevel (1- priority) priority))
+               (overlay-put instruction 'priority priority)
                (when (eq instruction
                          e::highlighted-instruction)
                  (setq bg-color
