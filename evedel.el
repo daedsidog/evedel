@@ -610,10 +610,11 @@ Examples:
   (cat or dog or (sheep and black))
   ((cat and dog) or (dog and goose))"
   (interactive)
-  (let ((directive (e::topmost-instruction
-                    (e::highest-priority-instruction (e::instructions-at (point)) t)
-                    :directive)))
-    (e::read-directive-tag-query directive)))
+  (if-let ((directive (e::topmost-instruction
+                         (e::highest-priority-instruction (e::instructions-at (point)) t)
+                         :directive)))
+      (e::read-directive-tag-query directive)
+    (user-error "No directive at point")))
 
 (defun e:add-tags (&optional reference)
   "Add tags to the reference under the point.
