@@ -1238,6 +1238,14 @@ BODYLESS controls special formatting if non-nil.
 
 DIRECTIVE-TEXT is used as the default directive.  Having DIRECTIVE-TEXT be
 non-nil prevents the opening of a prompt buffer."
+  ;; Reset existing directive overlay from non-default state.
+  (when-let ((topmost-directive (e::topmost-instruction (e::highest-priority-instruction
+                                                         (e::instructions-at start 'directive))
+                                                        'directive)))
+    (let ((directive-status (overlay-get topmost-directive 'e:directive-status)))
+      (unless (null directive-status)
+        (overlay-put topmost-directive 'e:directive-status nil)
+        (e::update-instruction-overlay topmost-directive t))))
   (let ((ov (e::create-instruction-overlay-in buffer start end)))
     (unless bodyless
       (overlay-put ov 'evaporate t))
