@@ -458,24 +458,32 @@ Throw a user error if no instructions to delete were found."
 (defun e:delete-all-instructions ()
   "Delete all Evedel instructions across all buffers."
   (interactive)
-  (let ((instructions (e::instructions))
-        buffers)
-    (when (or (not (called-interactively-p 'any))
-              (and (called-interactively-p 'any)
-                   instructions
-                   (y-or-n-p "Are you sure you want to delete all instructions?")))
-      (when (called-interactively-p 'any)
-        (setq buffers (cl:remove-duplicates (mapcar #'overlay-buffer instructions))))
-      (mapc #'e::delete-instruction instructions)
-      (setq e::instructions nil)
-      (when (and instructions buffers)
-        (let ((instruction-count (length instructions))
-              (buffer-count (length buffers)))
-          (message "Deleted %d Evedel instruction%s in %d buffer%s"
-                   instruction-count
-                   (if (= 1 instruction-count) "" "s")
-                   buffer-count
-                   (if (= 1 buffer-count) "" "s")))))))
+  (let ((instr-count (length (e::instructions))))
+    (when (and (called-interactively-p 'any)
+               (zerop instr-count))
+      (user-error "No instructions to delete"))
+    (when (and (called-interactively-p 'any)
+               instr-count
+               (not (y-or-n-p "Are you sure you want to delete all instructions?")))
+      (user-error "Aborted")))
+  (let ((buffer-count 0)
+        (deleted-instr-count 0))
+    (e::foreach-instruction instr
+      with buffer-hash = (make-hash-table)
+      unless (gethash (overlay-buffer instr) buffer-hash)
+      do (progn
+           (puthash (overlay-buffer instr) t buffer-hash)
+           (cl:incf buffer-count))
+      do (progn
+           (e::delete-instruction instr)
+           (cl:incf deleted-instr-count)))
+    (setq e::instructions nil)
+    (when (not (zerop deleted-instr-count))
+      (message "Deleted %d Evedel instruction%s in %d buffer%s"
+               deleted-instr-count
+               (if (= 1 deleted-instr-count) "" "s")
+               buffer-count
+               (if (= 1 buffer-count) "" "s")))))
 
 (defun e:convert-instructions ()
   "Convert instructions between reference and directive within the selected
