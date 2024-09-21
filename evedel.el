@@ -952,6 +952,11 @@ Returns the number of tags removed."
         (e::update-instruction-overlay reference t))
       removed)))
 
+(defun e::inherited-tags (reference)
+  "Return the list of all tags that REFERENCE inherits from its parents."
+  (when-let ((parent (e::parent-instruction reference :reference)))
+    (e::reference-tags parent t)))
+
 (defun e::reference-tags (reference &optional include-parent-tags)
   "Return the list of tags for the given REFERENCE.
 
@@ -1408,14 +1413,24 @@ non-nil."
                     (if is-bufferlevel
                         (append-to-label "BUFFER REFERENCE")
                       (append-to-label "REFERENCE")))
-                  (let ((tags (sort (e::reference-tags instruction t) #'string-lessp))
-                        (direct-tags (sort (e::reference-tags instruction) #'string-lessp)))
-                    (when tags
-                      (when-let ((inherited-tags (cl:nset-difference tags direct-tags)))
-                        (append-to-label (propertized-string-from-tags inherited-tags)
-                                         "INHERITED TAGS: "))
-                      (when direct-tags
-                        (append-to-label (propertized-string-from-tags direct-tags) "TAGS: ")))))
+                  (let* ((direct-tags (e::reference-tags instruction))
+                         (inherited-tags (e::inherited-tags instruction))
+                         (common-tags (cl:intersection inherited-tags direct-tags))
+                         (unique-tags (cl:set-difference direct-tags common-tags)))
+                    (when inherited-tags
+                      (append-to-label (propertized-string-from-tags
+                                        (sort (append inherited-tags) #'string-lessp))
+                                       (if common-tags
+                                           "INHERITED & COMMON TAGS: "
+                                         "INHERITED TAGS: ")))
+                    (when unique-tags
+                      (append-to-label (propertized-string-from-tags
+                                        (sort unique-tags #'string-lessp))
+                                       (if inherited-tags
+                                           (if common-tags
+                                               "UNIQUE TAGS: "
+                                             "DIRECT TAGS: ")
+                                         "TAGS: ")))))
                (:directive ; DIRECTIVE
                 (when (and (null topmost-directive) (overlay-get instruction
                                                                  'e:directive-status))
