@@ -1381,9 +1381,6 @@ non-nil."
              (:succeeded  e:directive-success-color)
              (:failed     e:directive-fail-color)
              (_           e:directive-color)))
-         (propertized-string-from-tags (tags)
-           (propertize (string-join (mapcar #'symbol-name tags) " ")
-                       'face 'font-lock-constant-face))
          (aux (instruction &optional update-children priority (parent nil))
            (let* ((instruction-type (e::instruction-type instruction))
                   (padding (with-current-buffer (overlay-buffer instruction)
@@ -1419,20 +1416,31 @@ non-nil."
                          (inherited-tags (e::inherited-tags instruction))
                          (common-tags (cl:intersection inherited-tags direct-tags))
                          (unique-tags (cl:set-difference direct-tags common-tags)))
-                    (when inherited-tags
-                      (append-to-label (propertized-string-from-tags
-                                        (sort (append inherited-tags) #'string-lessp))
-                                       (if common-tags
-                                           "INHERITED & COMMON TAGS: "
-                                         "INHERITED TAGS: ")))
-                    (when unique-tags
-                      (append-to-label (propertized-string-from-tags
-                                        (sort unique-tags #'string-lessp))
-                                       (if inherited-tags
-                                           (if common-tags
-                                               "UNIQUE TAGS: "
-                                             "DIRECT TAGS: ")
-                                         "TAGS: ")))))
+                    (cl:labels
+                        ((propertized-string-from-tags (tags)
+                           (string-join
+                            (mapcar (lambda (tag)
+                                      (propertize (symbol-name tag)
+                                                  'face
+                                                  (if (memq tag common-tags)
+                                                      'font-lock-warning-face
+                                                    'font-lock-constant-face)))
+                                    tags)
+                            " ")))
+                      (when inherited-tags
+                        (append-to-label (propertized-string-from-tags
+                                          (sort (append inherited-tags) #'string-lessp))
+                                         (if common-tags
+                                             "INHERITED & COMMON TAGS: "
+                                           "INHERITED TAGS: ")))
+                      (when unique-tags
+                        (append-to-label (propertized-string-from-tags
+                                          (sort unique-tags #'string-lessp))
+                                         (if inherited-tags
+                                             (if common-tags
+                                                 "UNIQUE TAGS: "
+                                               "DIRECT TAGS: ")
+                                           "TAGS: "))))))
                (:directive ; DIRECTIVE
                 (when (and (null topmost-directive) (overlay-get instruction
                                                                  'e:directive-status))
