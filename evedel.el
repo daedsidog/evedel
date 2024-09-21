@@ -1385,15 +1385,17 @@ non-nil."
            (propertize (string-join (mapcar #'symbol-name tags) " ")
                        'face 'font-lock-constant-face))
          (aux (instruction &optional update-children priority (parent nil))
-           (let ((instruction-type (e::instruction-type instruction))
-                 (padding (with-current-buffer (overlay-buffer instruction)
-                            (save-excursion
-                              (goto-char (overlay-start instruction))
-                              (make-string (current-column) ? ))))
-                 (is-bufferlevel (e::instruction-bufferlevel-p instruction))
-                 (parent-bufferlevel (and parent (e::instruction-bufferlevel-p parent)))
-                 (label "")
-                 color)
+           (let* ((instruction-type (e::instruction-type instruction))
+                  (padding (with-current-buffer (overlay-buffer instruction)
+                             (save-excursion
+                               (goto-char (overlay-start instruction))
+                               (make-string (current-column) ? ))))
+                  (is-bufferlevel (e::instruction-bufferlevel-p instruction))
+                  (parent-bufferlevel (and parent (e::instruction-bufferlevel-p parent)))
+                  ;; This is to prevent the buffer-level instruction from having a background color.
+                  (priority (if is-bufferlevel (1- priority) priority))
+                  (label "")
+                  color)
              (cl:labels
                  ((append-to-label (content &optional prefix)
                     (setq label
@@ -1501,7 +1503,7 @@ non-nil."
                                   tint))))
                (overlay-put instruction 'e:bg-color bg-color)
                (overlay-put instruction 'e:label-color label-color)
-               (overlay-put instruction 'priority (if is-bufferlevel (1- priority) priority))
+               (overlay-put instruction 'priority priority)
                (when (eq instruction
                          e::highlighted-instruction)
                  (setq bg-color
