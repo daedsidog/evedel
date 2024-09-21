@@ -324,7 +324,7 @@ command will resize the reference in the following manner:
   - If the mark is located OUTSIDE the reference (i.e., the point is located
     INSIDE the reference) then the reference will be shrunk to the point."
   (interactive)
-  (e::create-instruction :reference))
+  (e::create-instruction 'reference))
 
 ;;;###autoload
 (defun e:create-directive ()
@@ -338,7 +338,7 @@ command will resize the directive in the following manner:
   - If the mark is located OUTSIDE the directive (i.e., the point is located
     INSIDE the directive) then the directive will be shrunk to the point."
   (interactive)
-  (e::create-instruction :directive))
+  (e::create-instruction 'directive))
 
 (defun e:cycle-instructions-at-point (point)
   "Cycle through instructions at POINT, highlighting them.
@@ -371,8 +371,8 @@ overlap to the point where no other reasonable option is available."
 (defun e:modify-directive ()
   "Modify the directive under the point."
   (interactive)
-  (when-let ((directive (e::highest-priority-instruction (e::instructions-at (point)) :directive)))
-    (when (eq (overlay-get directive 'e:directive-status) :processing)
+  (when-let ((directive (e::highest-priority-instruction (e::instructions-at (point)) 'directive)))
+    (when (eq (overlay-get directive 'e:directive-status) 'processing)
       (overlay-put directive 'e:directive-status nil))
     (e::read-directive directive)))
 
@@ -396,16 +396,16 @@ If a region is not selected and there is a directive under the point, send it."
                     :in-place nil
                     :callback #'e::process-directive-llm-response
                     :context directive)
-                  (overlay-put directive 'e:directive-status :processing)
+                  (overlay-put directive 'e:directive-status 'processing)
                   (e::update-instruction-overlay directive t))))
     (if (region-active-p)
         (when-let ((toplevel-directives
                     (cl:remove-duplicates
                      (mapcar (lambda (inst)
-                               (e::topmost-instruction inst :directive))
+                               (e::topmost-instruction inst 'directive))
                              (e::instructions-in (region-beginning)
                                                  (region-end)
-                                                 :directive)))))
+                                                 'directive)))))
           (dolist (directive toplevel-directives)
             (execute directive))
           (let ((directive-count (length toplevel-directives)))
@@ -413,18 +413,18 @@ If a region is not selected and there is a directive under the point, send it."
                      directive-count
                      (if (> directive-count 1) "s" ""))))
       (if-let ((directive (e::topmost-instruction (e::highest-priority-instruction
-                                                   (e::instructions-at (point) :directive)
+                                                   (e::instructions-at (point) 'directive)
                                                    t)
-                                                  :directive)))
+                                                  'directive)))
           (progn
             (execute directive)
             (message "Sent directive to gptel for processing"))
         (when-let ((toplevel-directives (cl:remove-duplicates
                                          (mapcar (lambda (inst)
-                                                   (e::topmost-instruction inst :directive))
+                                                   (e::topmost-instruction inst 'directive))
                                                  (e::instructions-in (point-min)
                                                                             (point-max)
-                                                                            :directive)))))
+                                                                            'directive)))))
           (dolist (dir toplevel-directives)
             (execute dir))
           (message "Sent all directives in current buffer to gptel for processing"))))))
@@ -503,10 +503,10 @@ will throw a user error."
         (cond
          ((e::directivep instr)
           (unless (e::bodyless-instruction-p instr)
-            (overlay-put instr 'e:instruction-type :reference)
+            (overlay-put instr 'e:instruction-type 'reference)
             (setq converted-directives-to-references (1+ converted-directives-to-references))))
          ((e::referencep instr)
-          (overlay-put instr 'e:instruction-type :directive)
+          (overlay-put instr 'e:instruction-type 'directive)
           (setq converted-references-to-directives (1+ converted-references-to-directives)))
          (t
           (user-error "Unknown instruction type")))
@@ -536,46 +536,46 @@ will throw a user error."
 (defun e:next-instruction ()
   "Cycle through instructions in the forward direction."
   (interactive)
-  (unless (e::cycle-instruction nil :next)
-    (e::print-instruction-not-found :next nil)))
+  (unless (e::cycle-instruction nil 'next)
+    (e::print-instruction-not-found 'next nil)))
 
 (defun e:previous-instruction ()
   "Cycle through instructions in the backward direction."
   (interactive)
-  (unless (e::cycle-instruction nil :previous)
-    (e::print-instruction-not-found :previous nil)))
+  (unless (e::cycle-instruction nil 'previous)
+    (e::print-instruction-not-found 'previous nil)))
 
 (defun e:next-reference ()
   "Cycle through references in the forward direction."
   (interactive)
-  (unless (e::cycle-instruction :reference :next)
-    (e::print-instruction-not-found :next :reference)))
+  (unless (e::cycle-instruction 'reference 'next)
+    (e::print-instruction-not-found 'next 'reference)))
 
 (defun e:previous-reference ()
   "Cycle through references in the backward direction."
   (interactive)
-  (unless (e::cycle-instruction :reference :previous)
-    (e::print-instruction-not-found :previous :reference)))
+  (unless (e::cycle-instruction 'reference 'previous)
+    (e::print-instruction-not-found 'previous 'reference)))
 
 (defun e:next-directive ()
   "Cycle through directives in the forward direction."
   (interactive)
-  (unless (e::cycle-instruction :directive :next)
-    (e::print-instruction-not-found :next :directive)))
+  (unless (e::cycle-instruction 'directive 'next)
+    (e::print-instruction-not-found 'next 'directive)))
 
 (defun e:previous-directive ()
   "Cycle through directives in the backward direction."
   (interactive)
-  (unless (e::cycle-instruction :directive :previous)
-    (e::print-instruction-not-found :previous :directive)))
+  (unless (e::cycle-instruction 'directive 'previous)
+    (e::print-instruction-not-found 'previous 'directive)))
 
 (defun e:preview-directive-prompt ()
   "Preview directive prompt at the current point.
 
 This command is useful to see what is actually being sent to the model."
   (interactive)
-  (let ((directive (e::topmost-instruction (car (e::instructions-at (point) :directive))
-                                           :directive)))
+  (let ((directive (e::topmost-instruction (car (e::instructions-at (point) 'directive))
+                                           'directive)))
     (let ((request-string (e::directive-llm-prompt directive)))
       (let ((bufname "*evedel-directive-preview*"))
         (with-output-to-temp-buffer bufname
@@ -612,7 +612,7 @@ Examples:
   (interactive)
   (if-let ((directive (e::topmost-instruction
                          (e::highest-priority-instruction (e::instructions-at (point)) t)
-                         :directive)))
+                         'directive)))
       (e::read-directive-tag-query directive)
     (user-error "No directive at point")))
 
@@ -621,7 +621,7 @@ Examples:
 
 Adds specificly to REFERENCE if it is non-nil."
   (interactive)
-  (let* ((instructions (e::instructions-at (point) :reference))
+  (let* ((instructions (e::instructions-at (point) 'reference))
          (instr (or reference (e::highest-priority-instruction instructions t))))
     (if instr
         (let* ((existing-tags (e::available-tags))
@@ -635,7 +635,7 @@ Adds specificly to REFERENCE if it is non-nil."
 (defun e:remove-tags ()
   "Remove tags from the reference under the point."
   (interactive)
-  (let* ((instructions (e::instructions-at (point) :reference))
+  (let* ((instructions (e::instructions-at (point) 'reference))
          (instr (e::highest-priority-instruction instructions t)))
     (if instr
         (let ((tags-list (e::reference-tags instr)))
@@ -723,11 +723,11 @@ Adds specificly to REFERENCE if it is non-nil."
 (defun e::print-instruction-not-found (direction type)
   "Print a not found message for the given DIRECTION and TYPE."
   (let ((type-string (pcase type
-                       (:directive "directive")
-                       (:reference "reference")
+                       ('directive "directive")
+                       ('reference "reference")
                        (_ "instruction"))))
     (message "No %s %s found"
-             (if (eq direction :next) "next" "previous")
+             (if (eq direction 'next) "next" "previous")
              type-string)))
 
 (cl:defun e::reference-matches-query-p (reference query)
@@ -747,7 +747,7 @@ Adds specificly to REFERENCE if it is non-nil."
                                            ('is:bufferlevel
                                             (e::instruction-bufferlevel-p reference))
                                            ('is:subreference
-                                            (e::parent-instruction reference :reference))
+                                            (e::parent-instruction reference 'reference))
                                            ('is:tagless
                                             (null tags))
                                            ('is:directly-tagless
@@ -882,7 +882,7 @@ of the list rotated around it.  Otherwise, returns the LIST."
 
 (defun e::cycle-instruction (type direction)
   "Get the next or previous instruction overlay of TYPE.
-DIRECTION should be `:next' or `:previous' from the current point.
+DIRECTION should be `next' or `previous' from the current point.
 
 If no instruction found in the buffer, checks the next buffers in
 the `evedel--instructions' alist.
@@ -890,7 +890,7 @@ the `evedel--instructions' alist.
 Returns the found instruction, if any."
   ;; We want the buffers to be a cyclic list, based on the current buffer.
   (let* ((buffers (let ((bufs (mapcar #'car e::instructions)))
-                    (if (eq direction :next)
+                    (if (eq direction 'next)
                         (e::cycle-list-around (current-buffer) bufs)
                       (e::cycle-list-around (current-buffer) (nreverse bufs)))))
          (original-buffer (current-buffer))
@@ -904,8 +904,8 @@ Returns the found instruction, if any."
                                            (eq (e::instruction-type instr) type))
                                          instrs)))
         (let ((sorting-pred (pcase direction
-                              (:next #'<)
-                              (:previous #'>))))
+                              ('next #'<)
+                              ('previous #'>))))
           (when (eq buffer original-buffer)
             (setq instrs (cl:remove-if-not (lambda (instr)
                                              (funcall sorting-pred
@@ -954,7 +954,7 @@ Returns the number of tags removed."
 
 (defun e::inherited-tags (reference)
   "Return the list of all tags that REFERENCE inherits from its parents."
-  (when-let ((parent (e::parent-instruction reference :reference)))
+  (when-let ((parent (e::parent-instruction reference 'reference)))
     (e::reference-tags parent t)))
 
 (defun e::reference-tags (reference &optional include-parent-tags)
@@ -964,7 +964,7 @@ If INCLUDE-PARENT-TAG is non-nil, gets te parent's tags as well."
   (if (not include-parent-tags)
       (overlay-get reference 'e:reference-tags)
     (append (overlay-get reference 'e:reference-tags)
-            (when-let ((parent (e::parent-instruction reference :reference)))
+            (when-let ((parent (e::parent-instruction reference 'reference)))
               (e::reference-tags parent t)))))
 
 (defun e::delete-instruction-at (point)
@@ -978,7 +978,7 @@ Returns the deleted instruction overlay."
 
 (defun e::being-processed-p (instruction)
   "Return non-nil if the directive INSTRUCTION is being processed."
-  (eq (overlay-get instruction 'e:directive-status) :processing))
+  (eq (overlay-get instruction 'e:directive-status) 'processing))
 
 (defun e::directive-empty-p (directive)
   "Check if DIRECTIVE is empty.
@@ -1034,7 +1034,7 @@ function will resize it. See either `evedel-create-reference' or
             ;; existing precisely at the start of another.
             (user-error "Instruction intersects with existing instruction"))
           (let* ((buffer (current-buffer))
-                 (instruction (if (eq type :reference)
+                 (instruction (if (eq type 'reference)
                                   (e::create-reference-in buffer
                                                           (region-beginning)
                                                           (region-end))
@@ -1050,10 +1050,10 @@ function will resize it. See either `evedel-create-reference' or
                                                             (region-end)))))))
             (with-current-buffer buffer
               (deactivate-mark)
-              (when (eq type :reference)
+              (when (eq type 'reference)
                 (e:add-tags instruction)))
             instruction)))
-    (when (eq type :directive)
+    (when (eq type 'directive)
       (prog1 (e::create-directive-in (current-buffer) (point) (point) t)
         (deactivate-mark)))))
 
@@ -1066,11 +1066,11 @@ the current buffer."
     (unless (overlay-buffer directive)
       ;; Directive is gone...
       (cl:return-from e::process-directive-llm-response))
-    (unless (eq (overlay-get directive 'e:directive-status) :processing)
+    (unless (eq (overlay-get directive 'e:directive-status) 'processing)
       ;; The directive has been modified.  Do not continue.
       (cl:return-from e::process-directive-llm-response))
     (cl:flet ((mark-failed (reason)
-                (overlay-put directive 'e:directive-status :failed)
+                (overlay-put directive 'e:directive-status 'failed)
                 (overlay-put directive 'e:directive-fail-reason reason)))
       (if (null response)
           (mark-failed (plist-get info :status))
@@ -1078,7 +1078,7 @@ the current buffer."
         (if (not (string-match "```+.*\n\\(\\(?:.+\\|\n\\)+\\)\n```+" response))
             (mark-failed response)
           (let ((parsed-response (match-string 1 response)))
-            (overlay-put directive 'e:directive-status :succeeded)
+            (overlay-put directive 'e:directive-status 'succeeded)
             (with-current-buffer (overlay-buffer directive)
               (let ((beg (overlay-start directive))
                     (end (overlay-end directive)))
@@ -1104,10 +1104,10 @@ the current buffer."
     (e::update-instruction-overlay directive t)))
 
 (defun e::referencep (instruction)
-  (eq (e::instruction-type instruction) :reference))
+  (eq (e::instruction-type instruction) 'reference))
 
 (defun e::directivep (instruction)
-  (eq (e::instruction-type instruction) :directive))
+  (eq (e::instruction-type instruction) 'directive))
 
 (defun e::tint (source-color-name tint-color-name &optional intensity)
   "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
@@ -1149,7 +1149,7 @@ also in the INSTRUCTIONS list."
 (defun e::instruction-type (instruction)
   "Return the type of the INSTRUCTION overlay.
 
-Instruction type can either be `:reference' or `:directive'."
+Instruction type can either be `reference' or `directive'."
   (if-let ((type (overlay-get instruction 'e:instruction-type)))
       type
     (error "%s is not an instruction overlay" instruction)))
@@ -1225,7 +1225,7 @@ If OF-TYPE is non-nil, returns the parent with the given type."
 (defun e::create-reference-in (buffer start end)
   "Create a region reference from START to END in BUFFER."
   (let ((ov (e::create-instruction-overlay-in buffer start end)))
-    (overlay-put ov 'e:instruction-type :reference)
+    (overlay-put ov 'e:instruction-type 'reference)
     (overlay-put ov 'evaporate t)
     (e::update-instruction-overlay ov t)
     ov))
@@ -1241,7 +1241,7 @@ non-nil prevents the opening of a prompt buffer."
   (let ((ov (e::create-instruction-overlay-in buffer start end)))
     (unless bodyless
       (overlay-put ov 'evaporate t))
-    (overlay-put ov 'e:instruction-type :directive)
+    (overlay-put ov 'e:instruction-type 'directive)
     (overlay-put ov 'e:directive (or directive-text ""))
     (e::update-instruction-overlay ov (not bodyless))
     (unless directive-text
@@ -1377,9 +1377,9 @@ non-nil."
                                    topmost-directive
                                  directive)
                                'e:directive-status)
-             (:processing e:directive-processing-color)
-             (:succeeded  e:directive-success-color)
-             (:failed     e:directive-fail-color)
+             ('processing e:directive-processing-color)
+             ('succeeded  e:directive-success-color)
+             ('failed     e:directive-fail-color)
              (_           e:directive-color)))
          (aux (instruction &optional update-children priority (parent nil))
            (let* ((instruction-type (e::instruction-type instruction))
@@ -1403,10 +1403,10 @@ non-nil."
                                                         padding
                                                         (overlay-buffer instruction))))))
                (pcase instruction-type
-                 (:reference ; REFERENCE
+                 ('reference ; REFERENCE
                   (setq color e:reference-color)
                   (if (and parent
-                           (and (eq (e::instruction-type parent) :reference)
+                           (and (eq (e::instruction-type parent) 'reference)
                                 (not parent-bufferlevel)))
                       (append-to-label "SUBREFERENCE")
                     (if is-bufferlevel
@@ -1441,14 +1441,14 @@ non-nil."
                                                  "UNIQUE TAGS: "
                                                "DIRECT TAGS: ")
                                            "TAGS: "))))))
-               (:directive ; DIRECTIVE
+               ('directive ; DIRECTIVE
                 (when (and (null topmost-directive) (overlay-get instruction
                                                                  'e:directive-status))
                   (setq topmost-directive instruction))
                 (pcase (overlay-get instruction 'e:directive-status)
-                  (:processing (append-to-label "PROCESSING"))
-                  (:succeeded (append-to-label "SUCCEEDED"))
-                  (:failed (append-to-label (overlay-get instruction
+                  ('processing (append-to-label "PROCESSING"))
+                  ('succeeded (append-to-label "SUCCEEDED"))
+                  ('failed (append-to-label (overlay-get instruction
                                                          'e:directive-fail-reason)
                                             "FAILED: ")))
                 (setq color (directive-color instruction))
@@ -1470,7 +1470,7 @@ non-nil."
                                                        sublabel
                                                        padding
                                                        (overlay-buffer instruction))))
-                    (unless (e::parent-instruction instruction :directive)
+                    (unless (e::parent-instruction instruction 'directive)
                       (if-let ((query-string (overlay-get instruction
                                                           'e:directive-infix-tag-query-string)))
                           (append-to-label query-string "TAG QUERY: ")
@@ -1827,7 +1827,7 @@ Returns the prompt as a string."
                  (e::reference-matches-query-p instr query)))
          (toplevel-references (e::foreach-instruction inst
                                 when (and (e::referencep inst)
-                                          (eq (e::topmost-instruction inst :reference pred)
+                                          (eq (e::topmost-instruction inst 'reference pred)
                                               inst)
                                           ;; We do not wish to collect references that are
                                           ;; contained within directives. It's redundant.
@@ -1846,7 +1846,7 @@ Returns the prompt as a string."
                                              (cl:return alist))))
          (reference-count (length toplevel-references))
          (toplevel-directive-is-empty (string-empty-p (e::directive-text directive)))
-         (directive-toplevel-reference (e::topmost-instruction directive :reference pred))
+         (directive-toplevel-reference (e::topmost-instruction directive 'reference pred))
          (directive-buffer (overlay-buffer directive))
          ;; Should the directive buffer have a valid file path, we should use a relative path for
          ;; the other references, assuming that they too have a valid file path.
@@ -1878,7 +1878,7 @@ directive, so be mindful not to return anything superflous that surrounds it."))
                   (expanded-directive-text (directive)
                     (let ((directive-hints
                            (cl:remove-if-not (lambda (inst)
-                                               (and (eq (e::instruction-type inst) :directive)
+                                               (and (eq (e::instruction-type inst) 'directive)
                                                     (not (eq inst directive))))
                                              (e::wholly-contained-instructions
                                               (overlay-buffer directive)
