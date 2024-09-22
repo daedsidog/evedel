@@ -85,6 +85,15 @@ more finely-tuned control over how tinting looks.
 Does not affect the label colors, just the backgrounds."
   :type 'float)
 
+(defcustom e:directives-inherit-commentary t
+  "Controls if child directives inherit parent reference commentary.
+
+When set to t, directives that are children of references will inherit the
+reference commentary even if they do not include the reference itself.
+Otherwise, they will not inherit the commentary."
+  :type 'boolean
+  :group 'evedel)
+
 (defcustom e:empty-tag-query-matches-all t
   "Determines behavior of directives without a tag search query.
 
@@ -163,6 +172,7 @@ handles all the internal bookkeeping and cleanup."
                                 (alist-get ,buffer e::instructions)
                               (flatten-tree (mapcar #'cdr e::instructions)))
                          ,@body))))))
+
 ;;;###autoload
 (defun e:save-instructions (path)
   "Save instructions overlays to a file PATH specified by the user."
@@ -371,10 +381,18 @@ overlap to the point where no other reasonable option is available."
 (defun e:modify-directive ()
   "Modify the directive under the point."
   (interactive)
-  (when-let ((directive (e::highest-priority-instruction (e::instructions-at (point)) 'directive)))
+  (when-let ((directive (e::highest-priority-instruction (e::instructions-at (point) 'directive)
+                                                         t)))
     (when (eq (overlay-get directive 'e:directive-status) 'processing)
       (overlay-put directive 'e:directive-status nil))
     (e::read-directive directive)))
+
+(defun e:modify-reference-commentary ()
+  "Modify the reference commentary under the point."
+  (interactive)
+  (when-let ((reference (e::highest-priority-instruction (e::instructions-at (point) 'reference)
+                                                         t)))
+    (e::read-commentary reference)))
 
 (defun e:process-directives ()
   "Send directives to model via gptel.
@@ -760,6 +778,8 @@ Adds specificly to REFERENCE if it is non-nil."
                                             (null tags))
                                            ('is:directly-tagless
                                             (null (e::reference-tags reference nil)))
+                                           ('is:with-commentary
+                                            (not (string-empty-p (e::commentary-text reference))))
                                            (_ (member atom tags))))
                                        atoms)))
             (cl:progv atoms atom-bindings
@@ -1206,7 +1226,9 @@ If OF-TYPE is non-nil, returns the parent with the given type."
   (= (overlay-start instr) (overlay-end instr)))
 
 (defun e::subinstruction-of-p (sub parent)
-  "Return t is instruction SUB is contained entirely within instruction PARENT."
+  "Return t is instruction SUB is contained entirely within instruction PARENT.
+
+In this case, an instruction is _not_ considered a subinstruction of itself."
   (and (eq (overlay-buffer sub)
            (overlay-buffer parent))
        (<= (overlay-start parent) (overlay-start sub) (overlay-end sub) (overlay-end parent))
@@ -1456,7 +1478,11 @@ non-nil."
                                              (if common-tags
                                                  "UNIQUE TAGS: "
                                                "DIRECT TAGS: ")
-                                           "TAGS: "))))))
+                                           "TAGS: "))))
+                    (let ((commentary (string-trim (or (e::commentary-text instruction)
+                                                       ""))))
+                      (unless (string-empty-p commentary)
+                        (append-to-label commentary "COMMENTARY: ")))))
                ('directive ; DIRECTIVE
                 (when (and (null topmost-directive) (overlay-get instruction
                                                                  'e:directive-status))
@@ -1697,8 +1723,16 @@ The PRED must be a function which accepts an instruction."
         nil))))
 
 (defun e::directive-text (directive)
-  "Return the directive text of the DIRECTIVE overlay."
+  "Return the directive text of the DIRECTIVE overlay.
+
+Returns an empty string if there is no directive text."
   (or (overlay-get directive 'e:directive) ""))
+
+(defun e::commentary-text (reference)
+  "Return the commentary text of the REFERENCE overlay.
+
+Returns an empty string if there is no commentary."
+  (or (overlay-get reference 'e:commentary) ""))
 
 (defun e::read-directive (directive)
   "Prompt user to enter a directive text via minibuffer for DIRECTIVE."
@@ -1725,6 +1759,28 @@ The PRED must be a function which accepts an instruction."
            (e::update-instruction-overlay directive nil))
          (signal 'quit nil))))))
 
+(defun e::read-commentary (reference)
+  "Prompt user to enter a commentary text via minibuffer for REFERENCE."
+  (let ((original-commentary-text (e::commentary-text reference)))
+    (minibuffer-with-setup-hook
+        (lambda ()
+          (add-hook 'minibuffer-exit-hook
+                    (lambda ()
+                      (let ((commentary-text (minibuffer-contents)))
+                        (overlay-put reference 'e:commentary commentary-text)
+                        (e::update-instruction-overlay reference)))
+                    nil t)
+          (add-hook 'after-change-functions
+                    (lambda (_beg _end _len)
+                      (overlay-put reference 'e:commentary (minibuffer-contents))
+                      (e::update-instruction-overlay reference))
+                    nil t))
+      (condition-case _err
+          (read-from-minibuffer "Commentary: " original-commentary-text)
+        (quit
+         (overlay-put reference 'e:commentary original-commentary-text)
+         (e::update-instruction-overlay reference nil))
+        (signal 'quit nil)))))
 
 (defun e::descriptive-llm-mode-role (mode)
   "Derive the descriptive major mode role name from the major MODE.
@@ -1839,6 +1895,11 @@ Returns the prompt as a string."
     (error "Directive %s is empty" directive))
   (let* ((is-programmer (derived-mode-p 'prog-mode))
          (query (overlay-get directive 'e:directive-prefix-tag-query))
+         ;; This hash map is for saving up references whose commentary has been used up.  The reason
+         ;; we want to do this is for the case when `evedel-directives-inherit-commentary' is t, for
+         ;; which we want to display the commentary of parent references, but if we already queried
+         ;; the parent reference commentary, we wouldn't want for that commentary to appear again.
+         (used-commentary-refs (make-hash-table))
          (pred (lambda (instr)
                  (e::reference-matches-query-p instr query)))
          (toplevel-references (e::foreach-instruction inst
@@ -2009,7 +2070,30 @@ discrepancy."
                                    (format "\n\nThe directive is embedded in %s"
                                            (expanded-directive-text directive))
                                    "\n\n"
-                                   (response-directive-guide-text))))))))))
+                                   (response-directive-guide-text)))
+                                (let ((commentary (e::commentary-text ref)))
+                                  (unless (string-empty-p commentary)
+                                    (puthash ref t used-commentary-refs)
+                                    (format "\n\nReference commentary:\n\n%s"
+                                            (e::markdown-enquote commentary)))))))))))
+          (when e:directives-inherit-commentary
+            (when-let ((commentators
+                        (cl:remove-if (lambda (ref)
+                                        (gethash ref used-commentary-refs))
+                                      (e::ancestral-commentators directive))))
+              (insert (concat "\n\n"
+                              "## Additional Commentary"
+                              "\n\n"
+                              "Listed below is commentary from references which were not used in \
+the directive, but are nonetheless containing the directive, and thus could prove important:"))
+              (cl:loop for ref in commentators
+                       count ref into refnum
+                       do (progn
+                            (cl:destructuring-bind (ref-info-string _) (e::overlay-region-info ref)
+                              (insert (format "\n\nCommentary #%d for %s:\n\n%s"
+                                              refnum
+                                              ref-info-string
+                                              (e::markdown-enquote (e::commentary-text ref)))))))))
           (unless directive-toplevel-reference
             (insert
              (concat "\n\n"
@@ -2021,7 +2105,22 @@ discrepancy."
                      "\n\n"
                      (response-directive-guide-text))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
-        
+
+(defun e::ancestral-commentators (instruction)
+  "Return list of references which contain INSTRUCTION that have commentary.
+
+The list is sorted with the topmost references first."
+  (with-current-buffer (overlay-buffer instruction)
+    (let* ((start (overlay-start instruction))
+           (end (overlay-end instruction))
+           (instructions (e::instructions-in start end 'reference))
+           (filtered (cl:remove-if-not (lambda (instr)
+                                         (and (not (string-empty-p (e::commentary-text instr)))
+                                              (e::subinstruction-of-p instruction instr)))
+                                       instructions))
+           (sorted (sort filtered (lambda (a b) (e::subinstruction-of-p b a)))))
+      sorted)))
+
 (defun e::wordwise-diff-patch-buffers (old new)
   "Wordwise patch buffer OLD to be equivalent to buffer NEW via `ediff-buffers'.
 
@@ -2056,15 +2155,16 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
                                             t
                                             nil)
                     (cl:letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
-                      ;; This is very brittle.
-                      (with-current-buffer (get-buffer "*Ediff Control Panel*")
-                        (apply-all-diffs)
-                        (ediff-quit t))
-                      ;; Run regular diff to also replace empty newlines.
-                      (ediff-buffers old new)
-                      (with-current-buffer (get-buffer "*Ediff Control Panel*")
-                        (apply-all-diffs)
-                        (ediff-quit t))))))))
+                      (let ((ediff-control-buffer (get-buffer "*Ediff Control Panel*")))
+                        ;; This is very brittle.
+                        (with-current-buffer ediff-control-buffer
+                          (apply-all-diffs)
+                          (ediff-quit t))
+                        ;; Run regular diff to also replace empty newlines.
+                        (ediff-buffers old new)
+                        (with-current-buffer ediff-control-buffer
+                          (apply-all-diffs)
+                          (ediff-quit t)))))))))
         (set-window-configuration orig-window-config)))))
 
 (provide 'evedel)
