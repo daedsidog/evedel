@@ -130,7 +130,7 @@ Answers the question \"who is the model?\""
 
 (defvar e::instructions ()
   "Association list mapping buffers to lists of instruction overlays.")
-(defvar e::default-instruction-priority -99)
+(defvar e::default-instruction-priority -99)ppppp
 (defvar e::highlighted-instruction nil)
 
 (defmacro e::foreach-instruction (binding &rest body)
@@ -155,7 +155,6 @@ handles all the internal bookkeeping and cleanup."
   (cl:with-gensyms (cons buffer marked-bufs)
     (let ((instr (if (listp binding) (car binding) binding)))
       `(let ((,buffer ,(if (listp binding) (cadr binding) nil)))
-         ;; Remove invalid buffers from the instruction alist.
          (let ((,marked-bufs (cl:loop for ,cons in e::instructions
                                       unless (and ,buffer (not (eq (car ,cons) ,buffer)))
                                       do (setf (cdr ,cons)
@@ -175,47 +174,44 @@ handles all the internal bookkeeping and cleanup."
 
 ;;;###autoload
 (defun e:save-instructions (path)
-  "Save instructions overlays to a file PATH specified by the user."
+  "Save instructions overlays to a file PATH specified by the user.
+
+Instructions are only saved if they are associated with a buffer that has an
+associated file on disk.  In other words, instructions in ethereal buffers are
+not saved."
   (interactive (list (read-file-name "Save instruction list to file: ")))
-  (let ((buffer-alist ())
-        (file-alist ())
+  (let ((file-alist ())
         (saved-instruction-count 0))
     (e::foreach-instruction instr
       do (let ((file (file-relative-name (buffer-file-name (overlay-buffer instr))
-                                         (file-name-directory path)))
-               (buffer (buffer-name (overlay-buffer instr))))
+                                         (file-name-directory path))))
            (cl:incf saved-instruction-count)
            (push (list :overlay-start (overlay-start instr)
                        :overlay-end (overlay-end instr)
                        :properties (overlay-properties instr))
-                 (plist-get (alist-get (if file file buffer)
-                                       (if file file-alist buffer-alist)
+                 (plist-get (alist-get file
+                                       file-alist
                                        nil
                                        nil
                                        #'equal)
                             :instructions))))
-    (cl:loop for buffer-cons in buffer-alist
-             do (with-current-buffer (car buffer-cons)
-                  (setf (plist-get (car buffer-cons) :original-content)
-                        (buffer-substring-no-properties (point-min) (point-max)))))
     (cl:loop for file-cons in file-alist
              do (with-current-buffer (or (find-buffer-visiting (car file-cons))
                                          (find-file-noselect (car file-cons)))
                   (setf (plist-get (cdr file-cons) :original-content)
                         (buffer-substring-no-properties (point-min) (point-max)))))
-    (let ((data (list :files file-alist :buffers buffer-alist)))
-      (if (not (zerop saved-instruction-count))
-          (with-temp-file path
-            (prin1 data (current-buffer))
-            (let ((buffer-count (+ (length file-alist) (length buffer-alist))))
-              (message "Saved %d Evedel instruction%s from %d buffer%s to %s"
-                       saved-instruction-count
-                       (if (= 1 saved-instruction-count) "" "s")
-                       buffer-count
-                       (if (= 1 buffer-count) "" "s")
-                       path)))
-        (when (called-interactively-p 'any)
-          (message "No Evedel instructions to save"))))))
+    (if (not (zerop saved-instruction-count))
+        (with-temp-file path
+          (prin1 file-alist (current-buffer))
+          (let ((file-count (length file-alist)))
+            (message "Saved %d Evedel instruction%s from %d file%s to %s"
+                     saved-instruction-count
+                     (if (= 1 saved-instruction-count) "" "s")
+                     file-count
+                     (if (= 1 file-count) "" "s")
+                     path)))
+      (when (called-interactively-p 'any)
+        (message "No Evedel instructions to save")))))
 
 ;;;###autoload
 (defun e:load-instructions (path)
@@ -225,74 +221,64 @@ handles all the internal bookkeeping and cleanup."
              (called-interactively-p 'any))
     (unless (y-or-n-p "Discard existing Evedel instructions? ")
       (user-error "Aborted")))
-  (let* ((loaded-data (with-temp-buffer
+  (let* ((file-alist (with-temp-buffer
                         (insert-file-contents path)
                         (read (current-buffer))))
-         (file-alist (plist-get loaded-data :files))
-         (buffer-alist (plist-get loaded-data :buffers)))
-    (unless (and (listp file-alist) (listp buffer-alist))
+         (e::inhibit-instruction-restoration t))
+    (unless (listp file-alist)
       (user-error "Malformed Evedel instruction list"))
     (e:delete-all-instructions)
     (let ((total-restored 0)
           (total-kia 0)
           (total
-           (cl:labels
-               ((count-total-instrs (source)
-                  (cl:loop for (_ . plist) in source
+           (cl:loop for (_ . plist) in file-alist
                            with instr-count = 0
                            do (cl:incf instr-count (length (plist-get plist :instructions)))
                            finally (cl:return instr-count))))
-             (+ (count-total-instrs buffer-alist)
-                (count-total-instrs file-alist)))))
-      (cl:labels
-          ((restore-instructions (container get-buffer-fn)
-             (cl:loop for container-cons in container
-                      do (let ((name (car container-cons))
-                               (instructions (plist-get (cdr container-cons)
-                                                        :instructions))
-                               (original-content (plist-get (cdr container-cons)
-                                                            :original-content)))
-                           (with-current-buffer (funcall get-buffer-fn name)
-                             (let ((current-content (buffer-substring-no-properties (point-min)
-                                                                                    (point-max))))
-                               ;; The tmpbuf value here will indicate whether or not we have a new
-                               ;; buffer to patch to.  If it is nil, then it means we do not need
-                               ;; to do any patching.
-                               (let (tmpbuf)
-                                 (unwind-protect
-                                     (progn
-                                       (when (and e:patch-outdated-instructions
-                                                  (not (equal current-content original-content)))
-                                         (message "Patching outdated instructions...")
-                                         (setq tmpbuf (generate-new-buffer (symbol-name (gensym))))
-                                         (delete-region (point-min) (point-max))
-                                         (insert original-content)
-                                         (with-current-buffer tmpbuf
-                                           (insert current-content)))
-                                       (dolist (instr instructions)
-                                         (cl:destructuring-bind (&key overlay-start
-                                                                      overlay-end
-                                                                      properties)
-                                             instr
-                                           (e::restore-overlay (current-buffer)
-                                                               overlay-start
-                                                               overlay-end properties)))
-                                       (when tmpbuf ; tmpbuf? Then patch.
-                                         (e::wordwise-diff-patch-buffers (current-buffer) tmpbuf))
-                                       (let* ((restored (length (e::instructions-in (point-min)
-                                                                                    (point-max))))
-                                              (kia (- (length instructions) restored)))
-                                         (cl:incf total-restored restored)
-                                         (unless (zerop kia)
-                                           (message "%d instruction%s lost to patching in %s"
-                                                    kia
-                                                    (if (= 1 kia) "" "s")
-                                                    (current-buffer))
-                                           (cl:incf total-kia kia))))
-                                   (when tmpbuf
-                                     (kill-buffer tmpbuf))))))))))
-        (restore-instructions file-alist #'find-file-noselect)
-        (restore-instructions buffer-alist #'get-buffer))
+             (cl:loop for (file-name . plist) in file-alist
+               do (let ((instructions (plist-get plist :instructions))
+                        (original-content (plist-get plist :original-content)))
+                    (when-let ((buffer (when (file-exists-p file-name)
+                                         (find-file-noselect file-name))))
+                      (with-current-buffer buffer
+                        (let ((current-content (buffer-substring-no-properties (point-min)
+                                                                               (point-max))))
+                          ;; The tmpbuf value here will indicate whether or not we have a new buffer
+                          ;; to patch to.  If it is nil, then it means we do not need to do any
+                          ;; patching.
+                          (let (tmpbuf)
+                            (unwind-protect
+                                (progn
+                                  (when (and e:patch-outdated-instructions
+                                             (not (equal current-content original-content)))
+                                    (message "Patching outdated instructions...")
+                                    (setq tmpbuf (generate-new-buffer (symbol-name (gensym))))
+                                    (delete-region (point-min) (point-max))
+                                    (insert original-content)
+                                    (with-current-buffer tmpbuf
+                                      (insert current-content)))
+                                  (dolist (instr instructions)
+                                    (cl:destructuring-bind (&key overlay-start
+                                                                 overlay-end
+                                                                 properties)
+                                        instr
+                                      (e::restore-overlay (current-buffer)
+                                                          overlay-start
+                                                          overlay-end properties)))
+                                  (when tmpbuf ; tmpbuf? Then patch.
+                                    (e::wordwise-diff-patch-buffers (current-buffer) tmpbuf))
+                                  (let* ((restored (length (e::instructions-in (point-min)
+                                                                               (point-max))))
+                                         (kia (- (length instructions) restored)))
+                                    (cl:incf total-restored restored)
+                                    (unless (zerop kia)
+                                      (message "%d instruction%s lost to patching in %s"
+                                               kia
+                                               (if (= 1 kia) "" "s")
+                                               file-name)
+                                      (cl:incf total-kia kia))))
+                              (when tmpbuf
+                                (kill-buffer tmpbuf)))))))))
       (when (called-interactively-p 'any)
         (message "Restored %d out of %d Evedel instructions from %s%s"
                  total-restored
@@ -1292,6 +1278,7 @@ non-nil prevents the opening of a prompt buffer."
 
 Returns the deleted instruction overlay."
   (let ((children (e::child-instructions instruction)))
+    (overlay-put instruction 'e:deleted t)
     (delq instruction (alist-get (overlay-buffer instruction) e::instructions))
     (delete-overlay instruction)
     (dolist (child children)
