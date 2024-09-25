@@ -129,8 +129,8 @@ Answers the question \"who is the model?\""
   :type 'list)
 
 (defvar e::instructions ()
-  "Association list mapping buffers to lists of instruction overlays.")
-(defvar e::default-instruction-priority -99)ppppp
+  "Association list mapping buffers or files to lists of instruction overlays.")
+(defvar e::default-instruction-priority -99)
 (defvar e::highlighted-instruction nil)
 
 (defmacro e::foreach-instruction (binding &rest body)
@@ -152,24 +152,15 @@ have an associated buffer to the overlay.
 This macro is the preferred way to iterate over instructions, as it 
 handles all the internal bookkeeping and cleanup."
   (declare (indent 1))
-  (cl:with-gensyms (cons buffer marked-bufs)
+  ;; A "bof" stands for "buffer or file".
+  (cl:with-gensyms (cons bof instrs specific-buffer empty-bofs cleaned-bofs)
     (let ((instr (if (listp binding) (car binding) binding)))
-      `(let ((,buffer ,(if (listp binding) (cadr binding) nil)))
-         (let ((,marked-bufs (cl:loop for ,cons in e::instructions
-                                      unless (and ,buffer (not (eq (car ,cons) ,buffer)))
-                                      do (setf (cdr ,cons)
-                                               (cl:delete-if-not (lambda (instr)
-                                                                   (bufferp (overlay-buffer instr)))
-                                                                 (cdr ,cons)))
-                                      when (null (cdr ,cons))
-                                      collect (car ,cons) into ,marked-bufs)))
-           (setq e::instructions (cl:remove-if (lambda (entry)
-                                                 (member (car entry) ,marked-bufs))
-                                               e::instructions)))
+      `(let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
          (prog1 (cl:loop for ,instr
-                         in (if ,buffer
-                                (alist-get ,buffer e::instructions)
-                              (flatten-tree (mapcar #'cdr e::instructions)))
+                         in (if ,specific-buffer
+                                (alist-get ,specific-buffer e::instructions)
+                              (flatten-tree (mapcar #'cdr e::instructions))) ; TODO: Fix
+                         if (overlay-get ,instr 'e:deleted)
                          ,@body))))))
 
 ;;;###autoload
@@ -1174,7 +1165,8 @@ Instruction type can either be `reference' or `directive'."
   (with-current-buffer buffer
     (let ((overlay (make-overlay start end)))
       (overlay-put overlay 'e:instruction t)
-      (push overlay (alist-get buffer e::instructions))
+      (let ((location (if-let ((bfn (buffer-file-name buffer))) bfn buffer)))
+        (push overlay (alist-get location e::instructions)))
       (unless (bound-and-true-p e::after-change-functions-hooked)
         (setq-local e::after-change-functions-hooked t)
         (add-hook 'after-change-functions
@@ -1630,6 +1622,21 @@ Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
             (overlay-put new-ov prop (plist-get properties prop)))
           properties)
     (push new-ov (alist-get buffer e::instructions))))
+
+(cl:defun e::restore-file-overlays (file overlays)
+  "Restore FILE and its OVERLAYS and return amount of overlays restored."
+  (unless (file-exists-p file)
+    (cl:return-from e::restore-file-overlays 0))
+  (if-let ((buffer (find-buffer-visiting file)))
+      (cl:return-from e::restore-file-overlays 0)
+    (setq buffer (find-file-noselect file))
+    ;; TODO: Add file patching
+    (cl:loop for ov in overlays do (e::restore-overlay buffer
+                                                       (overlay-start ov)
+                                                       (overlay-end ov)
+                                                       (overlay-properties ov))
+             counting ov into total-restored
+             finally (cl:return total-restored))))
 
 (defun e::wholly-contained-instructions (buffer start end)
   "Return Evedel overlays in BUFFER that are entirely within START and END."
