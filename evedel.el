@@ -1656,7 +1656,7 @@ instructions lost to the patching process, if any."
               (setq restored-ovs (restore-overlays buffer instructions))))
           (let ((restored-instrs (e::instructions-in (point-min) (point-max))))
             (setq restored (length restored-instrs)
-                  kia (- (length instructions) (restored)))
+                  kia (- (length instructions) restored))
             (setf (alist-get file e::instructions) restored-instrs)))
         (setf (car (assoc file e::instructions)) buffer)
         (cl:values restored kia)))))
