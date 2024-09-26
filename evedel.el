@@ -152,16 +152,39 @@ have an associated buffer to the overlay.
 This macro is the preferred way to iterate over instructions, as it 
 handles all the internal bookkeeping and cleanup."
   (declare (indent 1))
-  ;; A "bof" stands for "buffer or file".
-  (cl:with-gensyms (cons bof instrs specific-buffer empty-bofs cleaned-bofs)
+  ;; "bof" stands for "buffer or file".
+  (cl:with-gensyms (cons bof specific-buffer)
     (let ((instr (if (listp binding) (car binding) binding)))
-      `(let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
-         (prog1 (cl:loop for ,instr
-                         in (if ,specific-buffer
-                                (alist-get ,specific-buffer e::instructions)
-                              (flatten-tree (mapcar #'cdr e::instructions))) ; TODO: Fix
-                         if (overlay-get ,instr 'e:deleted)
-                         ,@body))))))
+      `(cl:labels ((clean-alist-entry (cons)
+                     (let ((instrs (cl:remove-if (lambda (instr)
+                                                   (overlay-get instr 'e:deleted))
+                                                 (cdr cons))))
+                       (setf (cdr cons) instrs))))
+         (let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
+           (if (not ,specific-buffer)
+               (cl:loop for ,cons in e::instructions
+                        do (let ((,bof (car ,cons)))
+                             (if (stringp ,bof) ; bof is a file, restore it.
+                                 (e::restore-file-instructions ,bof)
+                               (clean-alist-entry ,cons)))) ; bof is a buffer, clean it.
+             (when-let ((cons (assoc ,specific-buffer e::instructions)))
+               (clean-alist-entry cons)))
+           ;; Remove empty cons cells from the alist.
+           (setq e::instructions (cl:remove-if (lambda (cons)
+                                                 (null (cdr cons)))
+                                               e::instructions))
+           ;; The instructions alist should now be cleaned of deleted instructions.
+           (cl:loop for ,instr
+                    in (if ,specific-buffer
+                           (alist-get ,specific-buffer e::instructions)
+                         (flatten-tree
+                          (cl:remove nil
+                                     (mapcar (lambda (plist-or-instrs)
+                                               (if (plist-get plist-or-instrs :instructions)
+                                                   nil ; Plist
+                                                 plist-or-instrs))
+                                             (mapcar #'cdr e::instructions)))))
+                    ,@body))))))
 
 ;;;###autoload
 (defun e:save-instructions (path)
@@ -1129,8 +1152,7 @@ Instruction type can either be `reference' or `directive'."
   (with-current-buffer buffer
     (let ((overlay (make-overlay start end)))
       (overlay-put overlay 'e:instruction t)
-      (let ((location (if-let ((bfn (buffer-file-name buffer))) bfn buffer)))
-        (push overlay (alist-get location e::instructions)))
+      (push overlay (alist-get buffer e::instructions))
       (unless (bound-and-true-p e::after-change-functions-hooked)
         (setq-local e::after-change-functions-hooked t)
         (add-hook 'after-change-functions
