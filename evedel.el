@@ -196,29 +196,28 @@ not saved."
   (interactive (list (read-file-name "Save instruction list to file: ")))
   (let ((file-alist ())
         (saved-instruction-count 0))
-    (e::foreach-instruction instr
-      do (let ((file (file-relative-name (buffer-file-name (overlay-buffer instr))
-                                         (file-name-directory path))))
-           (cl:incf saved-instruction-count)
-           (push (list :overlay-start (overlay-start instr)
-                       :overlay-end (overlay-end instr)
-                       :properties (overlay-properties instr))
-                 (plist-get (alist-get file
-                                       file-alist
-                                       nil
-                                       nil
-                                       #'equal)
-                            :instructions))))
-    (cl:loop for file-cons in file-alist
-             do (with-current-buffer (or (find-buffer-visiting (car file-cons))
-                                         (find-file-noselect (car file-cons)))
-                  (setf (plist-get (cdr file-cons) :original-content)
-                        (buffer-substring-no-properties (point-min) (point-max)))))
+    (cl:loop for cons in e::instructions
+             if (bufferp (car cons))
+             do (let ((buffer (car cons)))
+                  (let ((file (file-relative-name (buffer-file-name buffer)
+                                                  (file-name-directory path))))
+                    (when-let ((instrs (e::stashed-buffer-instructions buffer)))
+                      (let ((original-content
+                             (with-current-buffer buffer
+                               (buffer-substring-no-properties (point-min) (point-max)))))
+                        (push (cons file
+                                    (list :original-content original-content
+                                          :instructions instrs))
+                              file-alist))
+                      (cl:incf saved-instruction-count (length instrs)))))
+             else do
+             (push cons file-alist)
+             (cl:incf saved-instruction-count (length (plist-get (cdr cons) :instructions))))
     (if (not (zerop saved-instruction-count))
         (with-temp-file path
           (prin1 file-alist (current-buffer))
           (let ((file-count (length file-alist)))
-            (message "Saved %d Evedel instruction%s from %d file%s to %s"
+            (message "Wrote %d Evedel instruction%s from %d file%s to %s"
                      saved-instruction-count
                      (if (= 1 saved-instruction-count) "" "s")
                      file-count
@@ -237,8 +236,7 @@ not saved."
       (user-error "Aborted")))
   (let* ((file-alist (with-temp-buffer
                         (insert-file-contents path)
-                        (read (current-buffer))))
-         (e::inhibit-instruction-restoration t))
+                        (read (current-buffer)))))
     (unless (listp file-alist)
       (user-error "Malformed Evedel instruction list"))
     (e:delete-all-instructions)
@@ -637,6 +635,25 @@ Adds specificly to REFERENCE if it is non-nil."
               (let ((removed (e::remove-tags instr tags-to-remove)))
                 (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
       (user-error "No reference at point"))))
+
+(defun e::stashed-buffer-instructions (buffer)
+  (e::foreach-instruction (instr buffer)
+    collect (list :overlay-start (overlay-start instr)
+                  :overlay-end (overlay-end instr)
+                  :properties (overlay-properties instr))))
+
+(defun e::stash-buffer (buffer &optional file-contents)
+  (let ((instrs (e::stashed-buffer-instructions buffer)))
+    (when instrs
+      (with-current-buffer buffer
+        (let ((original-content (or file-contents (buffer-substring-no-properties (point-min)
+                                                                                  (point-max)))))
+          (setf (alist-get buffer e::instructions)
+                (list :original-content original-content
+                      :instructions instrs)
+                (car (assoc buffer e::instructions))
+                (buffer-file-name buffer))
+          (mapc #'delete-overlay (e::instructions-in (point-min) (point-max))))))))
 
 (defun e::read-directive-tag-query (directive)
   "Prompt user to enter a directive tag query text via minibuffer for DIRECTIVE."
@@ -1163,6 +1180,7 @@ Instruction type can either be `reference' or `directive'."
                         (dolist (instruction affected-instructions)
                           (e::update-instruction-overlay instruction)))))
                   nil t))
+      (e::setup-buffer-hooks buffer)
       overlay)))
 
 (defun e::instruction-p (overlay)
@@ -1619,47 +1637,87 @@ Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
           (not (string= original-content
                         (buffer-substring-no-properties (point-min) (point-max)))))))))
 
-(cl:defun e::restore-file-instructions (file)
+(defun e::setup-buffer-hooks (buffer)
+  (with-current-buffer buffer
+    (unless (bound-and-true-p e::buffer-hooks-setup)
+      (add-hook 'kill-buffer-hook
+                (lambda ()
+                  (when (e::buffer-has-instructions-p (current-buffer))
+                    (when-let ((file (buffer-file-name buffer)))
+                      (let ((file-contents
+                             (with-temp-buffer
+                               (insert-file-contents file)
+                               (buffer-substring-no-properties (point-min) (point-max)))))
+                        (e::stash-buffer buffer file-contents)
+                        (setq e::instructions (assq-delete-all buffer e::instructions))))))
+                nil t)
+      (add-hook 'before-revert-hook
+                (lambda ()
+                  (when (e::buffer-has-instructions-p buffer)
+                    (e::stash-buffer buffer)
+                    (setq-local e::buffer-instructions-reverted t)))
+                nil t)
+      (add-hook 'after-revert-hook
+                (lambda ()
+                  (when (bound-and-true-p e::buffer-reverted)
+                    (e::restore-file-instructions (buffer-file-name buffer) t)
+                    (setq-local e::buffer-instructions-reverted nil)))
+                nil t)
+      (setq-local e::buffer-hooks-setup t))))
+
+(defun e::buffer-has-instructions-p (buffer)
+  (assoc buffer e::instructions))
+
+(cl:defun e::restore-file-instructions (file &optional message)
   "Restore FILE and its INSTRUCTIONS.
 
 Returns two values: the amount of instructions restored and the amount of
-instructions lost to the patching process, if any."
-  (unless (file-exists-p file)
+instructions lost to the patching process, if any.
+
+If MESSAGE is non-nil, message the intent of patching outdated files."
+  (unless (and (file-exists-p file)
+               (assoc file e::instructions))
     (cl:return-from e::restore-file-instructions (cl:values 0 0)))
-  (cl:destructuring-bind (&key original-content instructions) (alist-get file e::instructions)
+  (cl:destructuring-bind (&key original-content instructions) (alist-get file
+                                                                         e::instructions
+                                                                         nil
+                                                                         nil
+                                                                         #'equal)
     (when (or (null original-content)
               (null instructions))
       (error "Malformed file given for restoration"))
-    (let ((e::inhibit-instruction-restoration t))
-      (let ((buffer (find-file-noselect file))
-            (restored 0)
-            (kia 0))
-        (with-current-buffer buffer
-          (cl:labels ((restore-overlays (dstbuf instr-plists)
-                        (let ((ovs ()))
-                          (dolist (instr instr-plists)
-                            (cl:destructuring-bind (&key overlay-start overlay-end properties) instr
-                              (push (e::restore-overlay dstbuf
-                                                        overlay-start
-                                                        overlay-end
-                                                        properties)
-                                    ovs)))
-                          ovs)))
-            (if (and e:patch-outdated-instructions
-                     (e::file-outdated-p file))
-                (progn
-                  (with-temp-buffer
-                    (insert original-content)
-                    (restore-overlays (current-buffer) instructions)
-                    (e::wordwise-diff-patch-buffers (current-buffer) buffer)
-                    (restore-overlays buffer (e::instructions-in (point-min) (point-max)))))
-              (setq restored-ovs (restore-overlays buffer instructions))))
-          (let ((restored-instrs (e::instructions-in (point-min) (point-max))))
-            (setq restored (length restored-instrs)
-                  kia (- (length instructions) restored))
-            (setf (alist-get file e::instructions) restored-instrs)))
-        (setf (car (assoc file e::instructions)) buffer)
-        (cl:values restored kia)))))
+    (let ((buffer (find-file-noselect file))
+          (restored 0)
+          (kia 0))
+      (with-current-buffer buffer
+        (e::setup-buffer-hooks buffer)
+        (cl:labels ((restore-overlays (dstbuf instr-plists)
+                      (let ((ovs ()))
+                        (dolist (instr instr-plists)
+                          (cl:destructuring-bind (&key overlay-start overlay-end properties) instr
+                            (push (e::restore-overlay dstbuf
+                                                      overlay-start
+                                                      overlay-end
+                                                      properties)
+                                  ovs)))
+                        ovs)))
+          (if (and e:patch-outdated-instructions
+                   (e::file-outdated-p file))
+              (progn
+                (when message
+                  (message "Patching outdated instructions in buffer '%s'..." (buffer-name buffer)))
+                (with-temp-buffer
+                  (insert original-content)
+                  (restore-overlays (current-buffer) instructions)
+                  (e::wordwise-diff-patch-buffers (current-buffer) buffer)
+                  (restore-overlays buffer (e::instructions-in (point-min) (point-max)))))
+            (restore-overlays buffer instructions)))
+        (let ((restored-instrs (e::instructions-in (point-min) (point-max))))
+          (setq restored (length restored-instrs)
+                kia (- (length instructions) restored))
+          (setf (alist-get file e::instructions nil nil #'equal) restored-instrs)))
+      (setf (car (assoc file e::instructions)) buffer)
+      (cl:values restored kia))))
 
 (defun e::wholly-contained-instructions (buffer start end)
   "Return Evedel overlays in BUFFER that are entirely within START and END."
@@ -2183,6 +2241,9 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
                           (apply-all-diffs)
                           (ediff-quit t)))))))))
         (set-window-configuration orig-window-config)))))
+
+(add-hook 'find-file-hook (lambda ()
+                            (e::restore-file-instructions (buffer-file-name (current-buffer)))))
 
 (provide 'evedel)
 
