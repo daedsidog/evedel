@@ -3,7 +3,7 @@
 ;; Copyright (C) 2024  daedsidog
 
 ;; Author: daedsidog <contact@daedsidog.com>
-;; Version: 0.4.7
+;; Version: 0.4.9
 ;; Keywords: convenience, tools
 ;; Package-Requires: ((emacs "29.1") (gptel "0.9.0"))
 ;; URL: https://github.com/daedsidog/evedel
@@ -127,7 +127,7 @@ Answers the question \"who is the model?\""
   "If t, `evedel--restore-file-instructions' becomes inert.
 This is sometimes necessary to prevent various hooks from interfering with the
 instruction restoration process.")
-(defvar e::version "v0.4.7")
+(defvar e::version "v0.4.9")
 
 (defmacro e::foreach-instruction (binding &rest body)
   "Iterate over `evedel--instructions' with BINDING as the binding.
