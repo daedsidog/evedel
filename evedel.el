@@ -145,6 +145,7 @@ Answers the question \"who is the model?\""
   "If t, `evedel--restore-file-instructions' becomes inert.
 This is sometimes necessary to prevent various hooks from interfering with the
 instruction restoration process.")
+(defvar e::version "v0.4.7")
 
 (defmacro e::foreach-instruction (binding &rest body)
   "Iterate over `evedel--instructions' with BINDING as the binding.
@@ -198,6 +199,19 @@ handles all the internal bookkeeping and cleanup."
                     ,@body))))))
 
 ;;;###autoload
+(defun e:version (&optional here message)
+  "Return the current version of Evedel.
+
+Interactively, or when MESSAGE is non-nil, show it in echo area.  With prefix
+argument, or when HERE is non-nil, insert it at point."
+  (interactive (list (or current-prefix-arg 'interactive)))
+  (let ((version e::version))
+    (cond
+     ((or message (called-interactively-p 'any)) (message "Evedel %s" version))
+     (here (insert (format "Evedel %s" version)))
+     (t version))))
+
+;;;###autoload
 (defun e:save-instructions (path)
   "Save instructions overlays to a file PATH specified by the user.
 
@@ -236,6 +250,8 @@ not saved."
                      path)))
       (when (called-interactively-p 'any)
         (message "No Evedel instructions to save")))))
+
+
 
 ;;;###autoload
 (defun e:load-instructions (path)
