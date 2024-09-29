@@ -86,11 +86,20 @@ Does not affect the label colors, just the backgrounds."
   :type 'float)
 
 (defcustom e:directives-inherit-commentary t
-  "Controls if child directives inherit parent reference commentary.
+  "Controls if child directives inherit ancestral reference commentary.
 
-When set to t, directives that are children of references will inherit the
-reference commentary even if they do not include the reference itself.
-Otherwise, they will not inherit the commentary."
+When set to non-nil, directives that are children of references will inherit the
+reference commentary even if they do not include the reference itself."
+  :type 'boolean
+  :group 'evedel)
+
+(defcustom e:references-inherit-commentary t
+  "Controls if references inherit ancestral reference commentary.
+
+When set to non-nil, references will inherit ancestral commentary.
+In other words, if a directive uses a reference which has no commentary, but
+said reference has a parent (direct or indirect) which has commentary, then
+said directive will utilize that commentary."
   :type 'boolean
   :group 'evedel)
 
@@ -160,9 +169,7 @@ handles all the internal bookkeeping and cleanup."
   (cl:with-gensyms (cons bof specific-buffer)
     (let ((instr (if (listp binding) (car binding) binding)))
       `(cl:labels ((clean-alist-entry (cons)
-                     (let ((instrs (cl:remove-if (lambda (instr)
-                                                   (overlay-get instr 'e:deleted))
-                                                 (cdr cons))))
+                     (let ((instrs (cl:remove-if-not #'overlay-buffer (cdr cons))))
                        (setf (cdr cons) instrs))))
          (let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
            (if (not ,specific-buffer)
@@ -746,7 +753,7 @@ Adds specificly to REFERENCE if it is non-nil."
              type-string)))
 
 (cl:defun e::reference-matches-query-p (reference query)
-  "Return t only if REFERENCES matches the tag QUERY."
+  "Return t only if REFERENCE matches the tag QUERY."
   (unless reference
     (cl:return-from e::reference-matches-query-p nil))
   (let ((atoms (cl:remove-duplicates (cl:remove-if (lambda (elm)
@@ -1282,7 +1289,6 @@ non-nil prevents the opening of a prompt buffer."
 
 Returns the deleted instruction overlay."
   (let ((children (e::child-instructions instruction)))
-    (overlay-put instruction 'e:deleted t)
     (delq instruction (alist-get (overlay-buffer instruction) e::instructions))
     (delete-overlay instruction)
     (dolist (child children)
@@ -2006,14 +2012,14 @@ Returns the prompt as a string."
          (used-commentary-refs (make-hash-table))
          (pred (lambda (instr)
                  (e::reference-matches-query-p instr query)))
-         (toplevel-references (e::foreach-instruction inst
-                                when (and (e::referencep inst)
-                                          (eq (e::topmost-instruction inst 'reference pred)
-                                              inst)
+         (toplevel-references (e::foreach-instruction instr
+                                when (and (e::referencep instr)
+                                          (eq (e::topmost-instruction instr 'reference pred)
+                                              instr)
                                           ;; We do not wish to collect references that are
-                                          ;; contained within directives. It's redundant.
-                                          (not (e::subinstruction-of-p inst directive)))
-                                collect inst))
+                                          ;; contained within directives, it's redundant.
+                                          (not (e::subinstruction-of-p instr directive)))
+                                collect instr))
          ;; The references in the reference alist should be sorted by their order of appearance
          ;; in the buffer.
          (reference-alist (cl:loop for reference in toplevel-references with alist = ()
@@ -2031,12 +2037,28 @@ Returns the prompt as a string."
          (directive-buffer (overlay-buffer directive))
          ;; Should the directive buffer have a valid file path, we should use a relative path for
          ;; the other references, assuming that they too have a valid file path.
-         (directive-filename (buffer-file-name directive-buffer)))
+         (directive-filename (buffer-file-name directive-buffer))
+         (reference-commentators ()))
     (cl:destructuring-bind (directive-region-info-string directive-region-string)
         (e::overlay-region-info directive)
       ;; This marking function is used to mark the prompt text so that it may later be formatted by
       ;; sections, should the need to do so will arise.
-      (cl:labels ((response-directive-guide-text ()
+      (cl:labels ((unreferenced-ancestral-commentators (instr)
+                    (cl:remove-if (lambda (ref)
+                                    (gethash ref used-commentary-refs))
+                                  (e::ancestral-commentators instr)))
+                  (aggregated-commentary (commentators)
+                    (cl:loop for ref in commentators
+                       count ref into refnum
+                       concat (cl:destructuring-bind (ref-info-string _)
+                                  (e::overlay-region-info ref)
+                                (format "\n\nCommentary #%d for %s:\n\n%s"
+                                        refnum
+                                        ref-info-string
+                                        (e::markdown-enquote (e::commentary-text ref))))
+                       into commentary
+                       finally (cl:return commentary)))
+                  (response-directive-guide-text ()
                     (if (e::bodyless-instruction-p directive)
                       "Note that your response will be injected in the position the directive is \
 embedded in, so be mindful not to return anything superfluous that surrounds the embedded \
@@ -2144,60 +2166,56 @@ discrepancy."
                       (if (> reference-count 1) "s" "")
                       (if directive-toplevel-reference " & Directive" "")))))
           (cl:loop for (buffer . references) in reference-alist
-                   do (progn
-                        (insert
-                         (concat
-                          "\n\n"
-                          (format "### %s" (capitalize-first-letter
-                                            (instruction-path-namestring buffer)))))
-                        (dolist (ref references)
-                          (cl:destructuring-bind (ref-info-string ref-string)
-                              (e::overlay-region-info ref)
-                            (let ((markdown-delimiter
-                                   (e::delimiting-markdown-backticks ref-string)))
-                              (insert
-                               (concat
-                                "\n\n"
-                                (format "Reference in %s%s"
-                                        ref-info-string
-                                        (if (eq ref directive-toplevel-reference)
-                                            (format " with embedded directive in %s:"
-                                                    directive-region-info-string)
-                                          ":"))
-                                "\n\n"
-                                (format "%s\n%s\n%s"
-                                        markdown-delimiter
-                                        ref-string
-                                        markdown-delimiter)
-                                (when directive-toplevel-reference
-                                  (concat
-                                   (format "\n\nThe directive is embedded in %s"
-                                           (expanded-directive-text directive))
-                                   "\n\n"
-                                   (response-directive-guide-text)))
-                                (let ((commentary (e::commentary-text ref)))
-                                  (unless (string-empty-p commentary)
-                                    (puthash ref t used-commentary-refs)
-                                    (format "\n\nReference commentary:\n\n%s"
-                                            (e::markdown-enquote commentary)))))))))))
-          (when e:directives-inherit-commentary
-            (when-let ((commentators
-                        (cl:remove-if (lambda (ref)
-                                        (gethash ref used-commentary-refs))
-                                      (e::ancestral-commentators directive))))
-              (insert (concat "\n\n"
-                              "## Additional Commentary"
+                   do (insert
+                       (concat
+                        "\n\n"
+                        (format "### %s" (capitalize-first-letter
+                                          (instruction-path-namestring buffer)))))
+                   (dolist (ref references)
+                     (when e:references-inherit-commentary
+                       (setq reference-commentators
+                             (append reference-commentators
+                                     (unreferenced-ancestral-commentators ref))))
+                     (cl:destructuring-bind (ref-info-string ref-string)
+                         (e::overlay-region-info ref)
+                       (let ((markdown-delimiter
+                              (e::delimiting-markdown-backticks ref-string)))
+                         (insert
+                          (concat
+                           "\n\n"
+                           (format "Reference in %s%s"
+                                   ref-info-string
+                                   (if (eq ref directive-toplevel-reference)
+                                       (format " with embedded directive in %s:"
+                                               directive-region-info-string)
+                                     ":"))
+                           "\n\n"
+                           (format "%s\n%s\n%s"
+                                   markdown-delimiter
+                                   ref-string
+                                   markdown-delimiter)
+                           (when directive-toplevel-reference
+                             (concat
+                              (format "\n\nThe directive is embedded in %s"
+                                      (expanded-directive-text directive))
                               "\n\n"
-                              "Listed below is commentary from references which were not used in \
-the directive, but are nonetheless containing the directive, and thus could prove important:"))
-              (cl:loop for ref in commentators
-                       count ref into refnum
-                       do (progn
-                            (cl:destructuring-bind (ref-info-string _) (e::overlay-region-info ref)
-                              (insert (format "\n\nCommentary #%d for %s:\n\n%s"
-                                              refnum
-                                              ref-info-string
-                                              (e::markdown-enquote (e::commentary-text ref)))))))))
+                              (response-directive-guide-text)))
+                           (let ((commentary (e::commentary-text ref)))
+                             (unless (string-empty-p commentary)
+                               (puthash ref t used-commentary-refs)
+                               (format "\n\nReference commentary:\n\n%s"
+                                       (e::markdown-enquote commentary))))))))))
+          (when (or e:directives-inherit-commentary e:references-inherit-commentary)
+            (let ((directive-commentators (unreferenced-ancestral-commentators directive)))
+              (when (or directive-commentators reference-commentators)
+                (insert (concat "\n\n"
+                                "## Additional Commentary"
+                                "\n\n"
+                                "Listed below is commentary from references which were not used in \
+the directive, but are nonetheless either containing the directive or belong to relevant parent \
+references, and thus could prove important:"))
+                (insert (aggregated-commentary (append directive-commentators
+                                                       reference-commentators))))))
           (unless directive-toplevel-reference
             (insert
              (concat "\n\n"
