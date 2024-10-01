@@ -224,17 +224,18 @@ not saved."
     (cl:loop for cons in e::instructions
              if (bufferp (car cons))
              do (let ((buffer (car cons)))
-                  (let ((file (file-relative-name (buffer-file-name buffer)
-                                                  (file-name-directory path))))
-                    (when-let ((instrs (e::stashed-buffer-instructions buffer)))
-                      (let ((original-content
-                             (with-current-buffer buffer
-                               (buffer-substring-no-properties (point-min) (point-max)))))
-                        (push (cons file
-                                    (list :original-content original-content
-                                          :instructions instrs))
-                              file-alist))
-                      (cl:incf saved-instruction-count (length instrs)))))
+                  (when-let ((buffer-file-name (buffer-file-name buffer)))
+                    (let ((file (file-relative-name buffer-file-name
+                                                    (file-name-directory path))))
+                      (when-let ((instrs (e::stashed-buffer-instructions buffer)))
+                        (let ((original-content
+                               (with-current-buffer buffer
+                                 (buffer-substring-no-properties (point-min) (point-max)))))
+                          (push (cons file
+                                      (list :original-content original-content
+                                            :instructions instrs))
+                                file-alist))
+                        (cl:incf saved-instruction-count (length instrs))))))
              else do
              (push cons file-alist)
              (cl:incf saved-instruction-count (length (plist-get (cdr cons) :instructions))))
