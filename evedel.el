@@ -2305,6 +2305,25 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
                           (ediff-quit t)))))))))
         (set-window-configuration orig-window-config)))))
 
+(defvar e::id-counter 0)
+(defvar e::id-usage-map (make-hash-table))
+(defvar e::retired-ids ())
+
+(defun e::create-id ()
+  (let ((id
+         (if e::retired-ids
+             (prog1
+                 (car e::retired-ids)
+               (setq e::retired-ids (cdr e::retired-ids)))
+           (cl:incf e::id-counter))))
+    (puthash id t e::id-usage-map )
+    id))
+
+(defun e::retire-id (id)
+  (when (gethash id e::id-usage-map)
+    (remhash id e::id-usage-map)
+    (push id e::retired-ids)))
+
 (add-hook 'find-file-hook
           (lambda ()
             (unless e::inhibit-file-restoration
