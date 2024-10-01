@@ -152,6 +152,9 @@ handles all the internal bookkeeping and cleanup."
   (cl:with-gensyms (cons bof specific-buffer)
     (let ((instr (if (listp binding) (car binding) binding)))
       `(cl:labels ((clean-alist-entry (cons)
+                     (let ((deleted-instrs (cl:remove-if #'overlay-buffer (cdr cons))))
+                       (mapc (lambda (instr) (e::retire-id (e::instruction-id instr)))
+                             deleted-instrs))
                      (let ((instrs (cl:remove-if-not #'overlay-buffer (cdr cons))))
                        (setf (cdr cons) instrs))))
          (let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
@@ -187,7 +190,7 @@ handles all the internal bookkeeping and cleanup."
 Interactively, or when MESSAGE is non-nil, show it in echo area.  With prefix
 argument, or when HERE is non-nil, insert it at point."
   (interactive (list (or current-prefix-arg 'interactive)))
-  (let ((version e::version))
+  (let ((version "v0.4.7"))
     (cond
      ((or message (called-interactively-p 'any)) (message "Evedel %s" version))
      (here (insert (format "Evedel %s" version)))
@@ -223,7 +226,14 @@ not saved."
              (cl:incf saved-instruction-count (length (plist-get (cdr cons) :instructions))))
     (if (not (zerop saved-instruction-count))
         (with-temp-file path
-          (prin1 file-alist (current-buffer))
+          (let ((save-file ()))
+            (setf save-file (plist-put save-file :version (e:version)))
+            (setf save-file
+                  (plist-put save-file :ids (list :id-counter e::id-counter
+                                                  :used-ids (hash-table-keys e::id-usage-map)
+                                                  :retired-ids e::retired-ids)))
+            (setf save-file (plist-put save-file :files file-alist))
+            (prin1 save-file (current-buffer)))
           (let ((file-count (length file-alist)))
             (message "Wrote %d Evedel instruction%s from %d file%s to %s"
                      saved-instruction-count
@@ -234,8 +244,6 @@ not saved."
       (when (called-interactively-p 'any)
         (message "No Evedel instructions to save")))))
 
-
-
 ;;;###autoload
 (defun e:load-instructions (path)
   "Load instruction overlays from a file specified by PATH."
@@ -244,12 +252,21 @@ not saved."
              (called-interactively-p 'any))
     (unless (y-or-n-p "Discard existing Evedel instructions? ")
       (user-error "Aborted")))
-  (let* ((file-alist (with-temp-buffer
-                        (insert-file-contents path)
-                        (read (current-buffer)))))
+  (let* ((save-file (e::patch-save-file (with-temp-buffer
+                                          (insert-file-contents path)
+                                          (read (current-buffer)))))
+         (file-alist (plist-get save-file :files))
+         (id-counter-plist (plist-get save-file :ids)))
     (unless (listp file-alist)
       (user-error "Malformed Evedel instruction list"))
     (e:delete-all-instructions)
+    (cl:destructuring-bind (&key id-counter used-ids retired-ids) id-counter-plist
+      (let ((hm (make-hash-table)))
+        (cl:loop for used-id in used-ids
+                 do (puthash used-id t hm))
+        (setq e::id-counter id-counter
+              e::id-usage-map hm
+              e::retired-ids retired-ids)))
     (setq e::instructions file-alist)
     (cl:loop for cons in e::instructions
              do (when (stringp (car cons))
@@ -417,8 +434,8 @@ If a region is not selected and there is a directive under the point, send it."
                                          (mapcar (lambda (inst)
                                                    (e::topmost-instruction inst 'directive))
                                                  (e::instructions-in (point-min)
-                                                                            (point-max)
-                                                                            'directive)))))
+                                                                     (point-max)
+                                                                     'directive)))))
           (dolist (dir toplevel-directives)
             (execute dir))
           (message "Sent all directives in current buffer to gptel for processing"))))))
@@ -471,13 +488,14 @@ Throw a user error if no instructions to delete were found."
       do (progn
            (e::delete-instruction instr)
            (cl:incf deleted-instr-count)))
-    (setq e::instructions nil)
     (when (not (zerop deleted-instr-count))
       (message "Deleted %d Evedel instruction%s in %d buffer%s"
                deleted-instr-count
                (if (= 1 deleted-instr-count) "" "s")
                buffer-count
-               (if (= 1 buffer-count) "" "s")))))
+               (if (= 1 buffer-count) "" "s"))))
+  (setq e::instructions nil)
+  (e::reset-id-counter))
 
 (defun e:convert-instructions ()
   "Convert instructions between reference and directive within the selected
@@ -650,6 +668,78 @@ Adds specificly to REFERENCE if it is non-nil."
                 (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
       (user-error "No reference at point"))))
 
+(cl:defun e::patch-save-file (save-file)
+  "Return a patched SAVE-FILE that matches the current version."
+  (let ((save-file-version (plist-get save-file :version))
+        (new-save-file ()))
+    (when (string= save-file-version (e:version))
+      (cl:return-from e::patch-save-file save-file))
+    (cl:labels ((recreate-instr-ids (files-alist)
+                  (let ((e::id-counter 0)
+                        (e::id-usage-map (make-hash-table))
+                        (e::retired-ids ()))
+                    (cl:loop for (_ . file-plist) in files-alist
+                             do (let ((instr-plists (plist-get file-plist :instructions)))
+                                  (cl:loop for instr-plist in instr-plists
+                                           do (let ((ov-props (plist-get instr-plist :properties)))
+                                                (with-temp-buffer
+                                                  (let ((ov (make-overlay 1 1)))
+                                                    (mapc (lambda (prop)
+                                                            (overlay-put ov
+                                                                         prop
+                                                                         (plist-get ov-props prop)))
+                                                          ov-props)
+                                                    (overlay-put ov 'e:id (e::create-id))
+                                                    (plist-put instr-plist
+                                                               :properties
+                                                               (overlay-properties ov))))))))
+                    (cl:values files-alist e::id-counter e::id-usage-map e::retired-ids)))
+                (recreate-id-counter (files-alist)
+                  (cl:multiple-value-bind (files-alist id-counter id-usage-map retired-ids)
+                      (recreate-instr-ids files-alist)
+                    (cl:values
+                     (list :id-counter id-counter
+                           :used-ids (hash-table-keys id-usage-map)
+                           :retired-ids retired-ids)
+                     files-alist))))
+    ;; There is no save file version available.  This means we are using a save file whose version
+    ;; is v0.4.7 or older.  Only v0.4.7 is newer support backward save compatibility.
+    ;;
+    ;; This branch updates version v0.4.7 to the latest version by adding ids to the existing
+    ;; instructions, and changing the save file to include the latest version number and the id
+    ;; counter.
+    (if (null save-file-version)
+        (condition-case err
+            (cl:multiple-value-bind (ids-plist files-alist) (recreate-id-counter save-file)
+              (setq new-save-file (plist-put new-save-file :ids ids-plist))
+              (setq new-save-file (plist-put new-save-file :files files-alist)))
+          (error
+           (error "Error patching a versionless save file.
+
+Save file backward compatibility was added in v0.4.7.  If the save file is older than that, then \
+unfortunately it is no longer supported.  If the save file is from v0.4.7 or newer, then this is a \
+bug that you should report.
+
+The error: %s" err)))
+      (pcase save-file-version
+        ("v0.4.9"
+         ;; v0.4.9 had a problem where overlays which were deleted extrajudicially did not retire
+         ;; their id number, causing the id to be used perpetually.  This patch cleans the used id
+         ;; list.
+         (cl:multiple-value-bind (ids-plist files-alist)
+             (recreate-id-counter (plist-get save-file :files))
+           (setq new-save-file (plist-put new-save-file :ids ids-plist))
+           (setq new-save-file (plist-put new-save-file :files files-alist))))))
+    (if new-save-file
+        (progn
+          (message "Patched loaded save file to version %s" (e:version))
+          (setq new-save-file (plist-put new-save-file :version (e:version)))
+          new-save-file)
+      save-file))))
+
+(defun e::instruction-id (instruction)
+  (overlay-get instruction 'e:id))
+
 (defun e::stashed-buffer-instructions (buffer)
   (e::foreach-instruction (instr buffer)
     collect (list :overlay-start (overlay-start instr)
@@ -760,7 +850,10 @@ Adds specificly to REFERENCE if it is non-nil."
                                                    (flatten-tree query)))))
     (if (and (null atoms) e:empty-tag-query-matches-all)
         t
-      (let ((tags (e::reference-tags reference t)))
+      (let ((tags (e::reference-tags reference t))
+            (instr-id (lambda (tag) (let ((tagname (symbol-name tag)))
+                                      (when (string-match "^id:\\([1-9][0-9]*\\)$" tagname)
+                                        (string-to-number (match-string 1 tagname)))))))
         (if (and (null tags) e:always-match-untagged-references)
             t
           (let ((atom-bindings (mapcar (lambda (atom)
@@ -775,7 +868,9 @@ Adds specificly to REFERENCE if it is non-nil."
                                             (null (e::reference-tags reference nil)))
                                            ('is:with-commentary
                                             (not (string-empty-p (e::commentary-text reference))))
-                                           (_ (member atom tags))))
+                                           (_ (if-let ((id (funcall instr-id atom)))
+                                                  (= id (e::instruction-id reference))
+                                                (member atom tags)))))
                                        atoms)))
             (cl:progv atoms atom-bindings
               (eval query))))))))
@@ -1183,6 +1278,7 @@ Instruction type can either be `reference' or `directive'."
   (with-current-buffer buffer
     (let ((overlay (make-overlay start end)))
       (overlay-put overlay 'e:instruction t)
+      (overlay-put overlay 'e:id (e::create-id))
       (push overlay (alist-get buffer e::instructions))
       (unless (bound-and-true-p e::after-change-functions-hooked)
         (setq-local e::after-change-functions-hooked t)
@@ -1288,7 +1384,8 @@ non-nil prevents the opening of a prompt buffer."
 
 Returns the deleted instruction overlay."
   (let ((children (e::child-instructions instruction)))
-    (delq instruction (alist-get (overlay-buffer instruction) e::instructions))
+    ;; Note that we don't want to retire ids here, as they will be retired automatically when the
+    ;; instruction gets cleaned up.
     (delete-overlay instruction)
     (dolist (child children)
       (e::update-instruction-overlay child t)))
@@ -1435,17 +1532,23 @@ non-nil."
                                   (e::fill-label-string content
                                                         (or prefix "")
                                                         padding
-                                                        (overlay-buffer instruction))))))
+                                                        (overlay-buffer instruction)))))
+                  (instr-id-str (instr)
+                    (propertize (format "#%s" (e::instruction-id instr))
+                                'face 'font-lock-constant-face)))
                (pcase instruction-type
                  ('reference ; REFERENCE
                   (setq color e:reference-color)
                   (if (and parent
                            (and (eq (e::instruction-type parent) 'reference)
                                 (not parent-bufferlevel)))
-                      (append-to-label "SUBREFERENCE")
+                      (append-to-label (format "SUBREFERENCE %s"
+                                               (instr-id-str instruction)))
                     (if is-bufferlevel
-                        (append-to-label "BUFFER REFERENCE")
-                      (append-to-label "REFERENCE")))
+                        (append-to-label (format "BUFFER REFERENCE %s"
+                                                 (instr-id-str instruction)))
+                      (append-to-label (format "REFERENCE %s"
+                                               (instr-id-str instruction)))))
                   (let* ((direct-tags (e::reference-tags instruction))
                          (inherited-tags (e::inherited-tags instruction))
                          (common-tags (cl:intersection inherited-tags direct-tags))
@@ -1493,8 +1596,9 @@ non-nil."
                 (let (sublabel)
                   (if (and parent
                            (e::directivep parent))
-                      (setq sublabel "DIRECTIVE HINT")
-                    (setq sublabel (concat sublabel "DIRECTIVE")))
+                      (setq sublabel (format "DIRECTIVE HINT %s" (instr-id-str instruction)))
+                    (setq sublabel (concat sublabel (format "DIRECTIVE %s"
+                                                            (instr-id-str instruction)))))
                   (let ((directive (string-trim (or (overlay-get instruction 'e:directive)
                                                     ""))))
                     (if (string-empty-p directive)
@@ -1831,6 +1935,29 @@ The PRED must be a function which accepts an instruction."
           best-instruction
         nil))))
 
+(defun e::toplevel-instructions (&optional of-type)
+  "Return the global top-level instructions across all buffers.
+
+Returns only instructions of specific type if OF-TYPE is non-nil.
+If OF-TYPE is non-nil, this function does _not_ return the \"next best\"
+instruction of the matching type; i.e., the returned list consists only of
+toplevel instructions that also match the specified type."
+  (e::foreach-instruction instr
+    with toplevels = (make-hash-table)
+    with inferiors = (make-hash-table)
+    unless (or (gethash instr toplevels) (gethash instr inferiors))
+    do (with-current-buffer (overlay-buffer instr)
+         (let* ((instrs (e::instructions-at (overlay-start instr)))
+                (topmost (car (cl:remove-if #'e::parent-instruction instrs)))
+                (children (delq topmost instrs)))
+           (puthash topmost t toplevels)
+           (cl:loop for child in children do (puthash child t inferiors))))
+    finally (cl:return (if of-type
+                           (cl:remove-if-not (lambda (instr)
+                                               (eq (e::instruction-type instr) of-type))
+                                             (hash-table-keys toplevels))
+                         (hash-table-keys toplevels)))))
+
 (defun e::directive-text (directive)
   "Return the directive text of the DIRECTIVE overlay.
 
@@ -2047,15 +2174,18 @@ Returns the prompt as a string."
                                   (e::ancestral-commentators instr)))
                   (aggregated-commentary (commentators)
                     (cl:loop for ref in commentators
-                       count ref into refnum
-                       concat (cl:destructuring-bind (ref-info-string _)
-                                  (e::overlay-region-info ref)
-                                (format "\n\nCommentary #%d for %s:\n\n%s"
-                                        refnum
-                                        ref-info-string
-                                        (e::markdown-enquote (e::commentary-text ref))))
-                       into commentary
-                       finally (cl:return commentary)))
+                             with hashset = (make-hash-table)
+                             unless (gethash ref hashset)
+                             do (puthash ref t hashset)
+                             and count ref into refnum
+                             and concat (cl:destructuring-bind (ref-info-string _)
+                                        (e::overlay-region-info ref)
+                                        (format "\n\nCommentary #%d for %s:\n\n%s"
+                                                refnum
+                                                ref-info-string
+                                                (e::markdown-enquote (e::commentary-text ref))))
+                             into commentary
+                             finally (cl:return commentary)))
                   (response-directive-guide-text ()
                     (if (e::bodyless-instruction-p directive)
                       "Note that your response will be injected in the position the directive is \
@@ -2284,6 +2414,31 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
                           (apply-all-diffs)
                           (ediff-quit t)))))))))
         (set-window-configuration orig-window-config)))))
+
+(defvar e::id-counter 0)
+(defvar e::id-usage-map (make-hash-table))
+(defvar e::retired-ids ())
+
+(defun e::create-id ()
+  (let ((id
+         (if e::retired-ids
+             (prog1
+                 (car e::retired-ids)
+               (setq e::retired-ids (cdr e::retired-ids)))
+           (cl:incf e::id-counter))))
+    (puthash id t e::id-usage-map )
+    id))
+
+(defun e::retire-id (id)
+  (when (gethash id e::id-usage-map)
+    (remhash id e::id-usage-map)
+    (push id e::retired-ids)))
+
+(defun e::reset-id-counter ()
+  "Reset all custom variables to their default values."
+  (setq e::id-counter 0)
+  (setq e::id-usage-map (make-hash-table))
+  (setq e::retired-ids ()))
 
 (add-hook 'find-file-hook
           (lambda ()
