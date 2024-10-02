@@ -827,7 +827,10 @@ The error: %s" err)))))
                                                    (flatten-tree query)))))
     (if (and (null atoms) e:empty-tag-query-matches-all)
         t
-      (let ((tags (e::reference-tags reference t)))
+      (let ((tags (e::reference-tags reference t))
+            (instr-id (lambda (tag) (let ((tagname (symbol-name tag)))
+                                      (when (string-match "^id:\\([1-9][0-9]*\\)$" tagname)
+                                        (string-to-number (match-string 1 tagname)))))))
         (if (and (null tags) e:always-match-untagged-references)
             t
           (let ((atom-bindings (mapcar (lambda (atom)
@@ -842,7 +845,9 @@ The error: %s" err)))))
                                             (null (e::reference-tags reference nil)))
                                            ('is:with-commentary
                                             (not (string-empty-p (e::commentary-text reference))))
-                                           (_ (member atom tags))))
+                                           (_ (if-let ((id (funcall instr-id atom)))
+                                                  (= id (e::instruction-id reference))
+                                                (member atom tags)))))
                                        atoms)))
             (cl:progv atoms atom-bindings
               (eval query))))))))
