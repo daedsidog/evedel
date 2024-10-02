@@ -225,9 +225,10 @@ not saved."
         (with-temp-file path
           (let ((save-file ()))
             (setf save-file (plist-put save-file :version (e:version)))
-            (setf save-file (plist-put save-file :ids (list :id-counter e::id-counter
-                                                            :id-usage-map e::id-usage-map
-                                                            :retired-ids e::retired-ids)))
+            (setf save-file
+                  (plist-put save-file :ids (list :id-counter e::id-counter
+                                                  :used-ids (hash-table-keys e::id-usage-map)
+                                                  :retired-ids e::retired-ids)))
             (setf save-file (plist-put save-file :files file-alist))
             (prin1 save-file (current-buffer)))
           (let ((file-count (length file-alist)))
@@ -256,10 +257,13 @@ not saved."
     (unless (listp file-alist)
       (user-error "Malformed Evedel instruction list"))
     (e:delete-all-instructions)
-    (cl:destructuring-bind (&key id-counter id-usage-map retired-ids) id-counter-plist
-      (setq e::id-counter id-counter
-            e::id-usage-map id-usage-map
-            e::retired-ids retired-ids))
+    (cl:destructuring-bind (&key id-counter used-ids retired-ids) id-counter-plist
+      (let ((hm (make-hash-table)))
+        (cl:loop for used-id in used-ids
+                 do (puthash used-id t hm))
+        (setq e::id-counter id-counter
+              e::id-usage-map hm
+              e::retired-ids retired-ids)))
     (setq e::instructions file-alist)
     (cl:loop for cons in e::instructions
              do (when (stringp (car cons))
@@ -689,12 +693,13 @@ Adds specificly to REFERENCE if it is non-nil."
                                               (plist-put instr-plist
                                                          :properties
                                                          (overlay-properties ov))))))))
-              (e::reset-id-counter)
               (setf new-save-file (plist-put new-save-file :version (e:version)))
-              (setf new-save-file (plist-put new-save-file :ids (list :id-counter e::id-counter
-                                                                      :id-usage-map e::id-usage-map
-                                                                      :retired-ids e::retired-ids)))
-              (setf new-save-file (plist-put new-save-file :files files-alist))))
+              (setf new-save-file
+                    (plist-put new-save-file :ids (list :id-counter e::id-counter
+                                                        :used-ids (hash-table-keys e::id-usage-map)
+                                                        :retired-ids e::retired-ids)))
+              (setf new-save-file (plist-put new-save-file :files files-alist))
+              (e::reset-id-counter)))
         (error
          (error "Error patching a versionless save file.
 
@@ -1499,17 +1504,23 @@ non-nil."
                                   (e::fill-label-string content
                                                         (or prefix "")
                                                         padding
-                                                        (overlay-buffer instruction))))))
+                                                        (overlay-buffer instruction)))))
+                  (instr-id-str (instr)
+                    (propertize (format "#%s" (e::instruction-id instr))
+                                'face 'font-lock-constant-face)))
                (pcase instruction-type
                  ('reference ; REFERENCE
                   (setq color e:reference-color)
                   (if (and parent
                            (and (eq (e::instruction-type parent) 'reference)
                                 (not parent-bufferlevel)))
-                      (append-to-label "SUBREFERENCE")
+                      (append-to-label (format "SUBREFERENCE %s"
+                                               (instr-id-str instruction)))
                     (if is-bufferlevel
-                        (append-to-label "BUFFER REFERENCE")
-                      (append-to-label "REFERENCE")))
+                        (append-to-label (format "BUFFER REFERENCE %s"
+                                                 (instr-id-str instruction)))
+                      (append-to-label (format "REFERENCE %s"
+                                               (instr-id-str instruction)))))
                   (let* ((direct-tags (e::reference-tags instruction))
                          (inherited-tags (e::inherited-tags instruction))
                          (common-tags (cl:intersection inherited-tags direct-tags))
@@ -1557,8 +1568,9 @@ non-nil."
                 (let (sublabel)
                   (if (and parent
                            (e::directivep parent))
-                      (setq sublabel "DIRECTIVE HINT")
-                    (setq sublabel (concat sublabel "DIRECTIVE")))
+                      (setq sublabel (format "DIRECTIVE HINT %s" (instr-id-str instruction)))
+                    (setq sublabel (concat sublabel (format "DIRECTIVE %s"
+                                                            (instr-id-str instruction)))))
                   (let ((directive (string-trim (or (overlay-get instruction 'e:directive)
                                                     ""))))
                     (if (string-empty-p directive)
@@ -2111,15 +2123,18 @@ Returns the prompt as a string."
                                   (e::ancestral-commentators instr)))
                   (aggregated-commentary (commentators)
                     (cl:loop for ref in commentators
-                       count ref into refnum
-                       concat (cl:destructuring-bind (ref-info-string _)
-                                  (e::overlay-region-info ref)
-                                (format "\n\nCommentary #%d for %s:\n\n%s"
-                                        refnum
-                                        ref-info-string
-                                        (e::markdown-enquote (e::commentary-text ref))))
-                       into commentary
-                       finally (cl:return commentary)))
+                             with hashset = (make-hash-table)
+                             unless (gethash ref hashset)
+                             do (puthash ref t hashset)
+                             and count ref into refnum
+                             and concat (cl:destructuring-bind (ref-info-string _)
+                                        (e::overlay-region-info ref)
+                                        (format "\n\nCommentary #%d for %s:\n\n%s"
+                                                refnum
+                                                ref-info-string
+                                                (e::markdown-enquote (e::commentary-text ref))))
+                             into commentary
+                             finally (cl:return commentary)))
                   (response-directive-guide-text ()
                     (if (e::bodyless-instruction-p directive)
                       "Note that your response will be injected in the position the directive is \
