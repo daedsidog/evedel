@@ -103,6 +103,7 @@ Additionally, there are special meta tag symbols that have exclusive meanings:
 - =is:directly-tagless=: Returns references which may have inherited tags, but no tags of their own.
 - =is:subreference=: Returns references which have another reference as their parent.
 - =is:with-commentary=: Returns references that directly contain commentary text.
+- =id:<positive-integer>=: Returns references the id matched by =positive-integer=.
 
 =evedel-empty-tag-query-matches-all= determines the behavior of directives without a tag search query. If set to =t=, directives lacking a specific tag search query will use all available references. Alternatively, if set to =nil=, such directives will not use any references, leading to potentially narrower results.
 
