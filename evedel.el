@@ -3,7 +3,7 @@
 ;; Copyright (C) 2024  daedsidog
 
 ;; Author: daedsidog <contact@daedsidog.com>
-;; Version: 0.4.7
+;; Version: 0.4.9
 ;; Keywords: convenience, tools
 ;; Package-Requires: ((emacs "29.1") (gptel "0.9.0"))
 ;; URL: https://github.com/daedsidog/evedel
@@ -127,7 +127,7 @@ Answers the question \"who is the model?\""
   "If t, `evedel--restore-file-instructions' becomes inert.
 This is sometimes necessary to prevent various hooks from interfering with the
 instruction restoration process.")
-(defvar e::version "v0.4.7")
+(defvar e::version "v0.4.9")
 
 (defmacro e::foreach-instruction (binding &rest body)
   "Iterate over `evedel--instructions' with BINDING as the binding.
@@ -223,7 +223,13 @@ not saved."
              (cl:incf saved-instruction-count (length (plist-get (cdr cons) :instructions))))
     (if (not (zerop saved-instruction-count))
         (with-temp-file path
-          (prin1 file-alist (current-buffer))
+          (let ((save-file ()))
+            (setf save-file (plist-put save-file :version (e:version)))
+            (setf save-file (plist-put save-file :ids (list :id-counter e::id-counter
+                                                            :id-usage-map e::id-usage-map
+                                                            :retired-ids e::retired-ids)))
+            (setf save-file (plist-put save-file :files file-alist))
+            (prin1 save-file (current-buffer)))
           (let ((file-count (length file-alist)))
             (message "Wrote %d Evedel instruction%s from %d file%s to %s"
                      saved-instruction-count
@@ -234,8 +240,6 @@ not saved."
       (when (called-interactively-p 'any)
         (message "No Evedel instructions to save")))))
 
-
-
 ;;;###autoload
 (defun e:load-instructions (path)
   "Load instruction overlays from a file specified by PATH."
@@ -244,12 +248,18 @@ not saved."
              (called-interactively-p 'any))
     (unless (y-or-n-p "Discard existing Evedel instructions? ")
       (user-error "Aborted")))
-  (let* ((file-alist (with-temp-buffer
-                        (insert-file-contents path)
-                        (read (current-buffer)))))
+  (let* ((save-file (e::patch-save-file (with-temp-buffer
+                                          (insert-file-contents path)
+                                          (read (current-buffer)))))
+         (file-alist (plist-get save-file :files))
+         (id-counter-plist (plist-get save-file :ids)))
     (unless (listp file-alist)
       (user-error "Malformed Evedel instruction list"))
     (e:delete-all-instructions)
+    (cl:destructuring-bind (&key id-counter id-usage-map retired-ids) id-counter-plist
+      (setq e::id-counter id-counter
+            e::id-usage-map id-usage-map
+            e::retired-ids retired-ids))
     (setq e::instructions file-alist)
     (cl:loop for cons in e::instructions
              do (when (stringp (car cons))
@@ -477,7 +487,8 @@ Throw a user error if no instructions to delete were found."
                deleted-instr-count
                (if (= 1 deleted-instr-count) "" "s")
                buffer-count
-               (if (= 1 buffer-count) "" "s")))))
+               (if (= 1 buffer-count) "" "s"))))
+  (e::reset-id-counter))
 
 (defun e:convert-instructions ()
   "Convert instructions between reference and directive within the selected
@@ -649,6 +660,57 @@ Adds specificly to REFERENCE if it is non-nil."
               (let ((removed (e::remove-tags instr tags-to-remove)))
                 (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
       (user-error "No reference at point"))))
+
+(cl:defun e::patch-save-file (save-file)
+  "Return a patched SAVE-FILE that matches the current version."
+  (let ((save-file-version (plist-get save-file :version))
+        (new-save-file ()))
+    (when (string= save-file-version (e:version))
+      (cl:return-from e::patch-save-file save-file))
+    (cond
+     ;; Save file is version v0.4.7, the first version with backward compatibility.
+     (t
+      (condition-case err
+          (progn
+            (e::reset-id-counter)
+            (let ((files-alist save-file))
+              (cl:loop for (_ . file-plist) in files-alist
+                       do (let ((instr-plists (plist-get file-plist :instructions)))
+                            (cl:loop for instr-plist in instr-plists
+                                     do (let ((ov-props (plist-get instr-plist :properties)))
+                                          (with-temp-buffer
+                                            (let ((ov (make-overlay 1 1)))
+                                              (mapc (lambda (prop)
+                                                      (overlay-put ov
+                                                                   prop
+                                                                   (plist-get ov-props prop)))
+                                                    ov-props)
+                                              (overlay-put ov 'e:id (e::create-id))
+                                              (plist-put instr-plist
+                                                         :properties
+                                                         (overlay-properties ov))))))))
+              (e::reset-id-counter)
+              (setf new-save-file (plist-put new-save-file :version (e:version)))
+              (setf new-save-file (plist-put new-save-file :ids (list :id-counter e::id-counter
+                                                                      :id-usage-map e::id-usage-map
+                                                                      :retired-ids e::retired-ids)))
+              (setf new-save-file (plist-put new-save-file :files files-alist))))
+        (error
+         (error "Error patching a versionless save file.
+
+Save file backward compatibility was added in v0.4.7.  If the save file is older than that, then \
+unfortunately it is no longer supported.  If the save file is from v0.4.7 or newer, then this is a \
+bug that you should report.
+
+The error: %s" err)))))
+    (if new-save-file
+        (progn
+          (message "Patched loaded save file to version %s" (e:version))
+          new-save-file)
+      save-file)))
+
+(defun e::instruction-id (instruction)
+  (overlay-get instruction 'e:id))
 
 (defun e::stashed-buffer-instructions (buffer)
   (e::foreach-instruction (instr buffer)
@@ -1183,6 +1245,7 @@ Instruction type can either be `reference' or `directive'."
   (with-current-buffer buffer
     (let ((overlay (make-overlay start end)))
       (overlay-put overlay 'e:instruction t)
+      (overlay-put overlay 'e:id (e::create-id))
       (push overlay (alist-get buffer e::instructions))
       (unless (bound-and-true-p e::after-change-functions-hooked)
         (setq-local e::after-change-functions-hooked t)
@@ -1289,6 +1352,7 @@ non-nil prevents the opening of a prompt buffer."
 Returns the deleted instruction overlay."
   (let ((children (e::child-instructions instruction)))
     (delq instruction (alist-get (overlay-buffer instruction) e::instructions))
+    (e::retire-id (e::instruction-id instruction))
     (delete-overlay instruction)
     (dolist (child children)
       (e::update-instruction-overlay child t)))
@@ -2303,6 +2367,12 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
   (when (gethash id e::id-usage-map)
     (remhash id e::id-usage-map)
     (push id e::retired-ids)))
+
+(defun e::reset-id-counter ()
+  "Reset all custom variables to their default values."
+  (setq e::id-counter 0)
+  (setq e::id-usage-map (make-hash-table))
+  (setq e::retired-ids ()))
 
 (add-hook 'find-file-hook
           (lambda ()
