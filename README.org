@@ -104,9 +104,9 @@ Additionally, there are special meta tag symbols that have exclusive meanings:
 - =is:subreference=: Returns references which have another reference as their parent.
 - =is:with-commentary=: Returns references that directly contain commentary text.
 
-- =evedel-empty-tag-query-matches-all=: This custom variable determines the behavior of directives without a tag search query. If set to =t=, directives lacking a specific tag search query will use all available references. Alternatively, if set to =nil=, such directives will not use any references, leading to potentially narrower results.
+=evedel-empty-tag-query-matches-all= determines the behavior of directives without a tag search query. If set to =t=, directives lacking a specific tag search query will use all available references. Alternatively, if set to =nil=, such directives will not use any references, leading to potentially narrower results.
 
-- =evedel-always-match-untagged-references=: This custom variable controls the inclusion of untagged references in directive prompts. When set to =t=, untagged references are always incorporated into directive references, ensuring comprehensive coverage. Conversely, when set to =nil=, untagged references are ignored unless =evedel-empty-tag-query-matches-all= is set to =t=.  
+=evedel-always-match-untagged-references= controls the inclusion of untagged references in directive prompts. When set to =t=, untagged references are always incorporated into directive references, ensuring comprehensive coverage. Conversely, when set to =nil=, untagged references are ignored unless =evedel-empty-tag-query-matches-all= is set to =t=.
 
 **** Commentary
 
@@ -126,8 +126,6 @@ You can add commentaries to references with the =evedel-modify-reference-comment
 |----------------------------------------+------------------------------------------------------------|
 | Custom Variable                        | Variable Description                                       |
 |----------------------------------------+------------------------------------------------------------|
-| =evedel-directives-inherit-commentary= | Controls if child directives inherit ancestral commentary. |
-| =evedel-references-inherit-commentary= | Controls if child references inherit ancestral commentary. |
 | =evedel-descriptive-mode-roles=        | Alist mapping major modes to model roles association list  |
 |----------------------------------------+------------------------------------------------------------|
 
