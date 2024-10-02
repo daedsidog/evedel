@@ -85,24 +85,6 @@ more finely-tuned control over how tinting looks.
 Does not affect the label colors, just the backgrounds."
   :type 'float)
 
-(defcustom e:directives-inherit-commentary t
-  "Controls if child directives inherit ancestral reference commentary.
-
-When set to non-nil, directives that are children of references will inherit the
-reference commentary even if they do not include the reference itself."
-  :type 'boolean
-  :group 'evedel)
-
-(defcustom e:references-inherit-commentary t
-  "Controls if references inherit ancestral reference commentary.
-
-When set to non-nil, references will inherit ancestral commentary.
-In other words, if a directive uses a reference which has no commentary, but
-said reference has a parent (direct or indirect) which has commentary, then
-said directive will utilize that commentary."
-  :type 'boolean
-  :group 'evedel)
-
 (defcustom e:empty-tag-query-matches-all t
   "Determines behavior of directives without a tag search query.
 
@@ -2023,9 +2005,8 @@ Returns the prompt as a string."
   (let* ((is-programmer (derived-mode-p 'prog-mode))
          (query (overlay-get directive 'e:directive-prefix-tag-query))
          ;; This hash map is for saving up references whose commentary has been used up.  The reason
-         ;; we want to do this is for the case when `evedel-directives-inherit-commentary' is t, for
-         ;; which we want to display the commentary of parent references, but if we already queried
-         ;; the parent reference commentary, we wouldn't want for that commentary to appear again.
+         ;; we want to do this is for the case when we already queried the parent reference
+         ;; commentary, we wouldn't want for that commentary to appear again.
          (used-commentary-refs (make-hash-table))
          (pred (lambda (instr)
                  (e::reference-matches-query-p instr query)))
@@ -2189,10 +2170,9 @@ discrepancy."
                         (format "### %s" (capitalize-first-letter
                                           (instruction-path-namestring buffer)))))
                    (dolist (ref references)
-                     (when e:references-inherit-commentary
-                       (setq reference-commentators
-                             (append reference-commentators
-                                     (unreferenced-ancestral-commentators ref))))
+                     (setq reference-commentators
+                           (append reference-commentators
+                                   (unreferenced-ancestral-commentators ref)))
                      (cl:destructuring-bind (ref-info-string ref-string)
                          (e::overlay-region-info ref)
                        (let ((markdown-delimiter
@@ -2222,17 +2202,16 @@ discrepancy."
                                (puthash ref t used-commentary-refs)
                                (format "\n\nReference commentary:\n\n%s"
                                        (e::markdown-enquote commentary))))))))))
-          (when (or e:directives-inherit-commentary e:references-inherit-commentary)
-            (let ((directive-commentators (unreferenced-ancestral-commentators directive)))
-              (when (or directive-commentators reference-commentators)
-                (insert (concat "\n\n"
-                                "## Additional Commentary"
-                                "\n\n"
-                                "Listed below is commentary from references which were not used in \
+          (let ((directive-commentators (unreferenced-ancestral-commentators directive)))
+            (when (or directive-commentators reference-commentators)
+              (insert (concat "\n\n"
+                              "## Additional Commentary"
+                              "\n\n"
+                              "Listed below is commentary from references which were not used in \
 the directive, but are nonetheless either containing the directive or belong to relevant parent \
 references, and thus could prove important:"))
-                (insert (aggregated-commentary (append directive-commentators
-                                                       reference-commentators))))))
+              (insert (aggregated-commentary (append directive-commentators
+                                                     reference-commentators)))))
           (unless directive-toplevel-reference
             (insert
              (concat "\n\n"
