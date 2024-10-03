@@ -3,7 +3,7 @@
 ;; Copyright (C) 2024  daedsidog
 
 ;; Author: daedsidog <contact@daedsidog.com>
-;; Version: 0.4.9
+;; Version: 0.4.10
 ;; Keywords: convenience, tools
 ;; Package-Requires: ((emacs "29.1") (gptel "0.9.0"))
 ;; URL: https://github.com/daedsidog/evedel
@@ -127,7 +127,6 @@ Answers the question \"who is the model?\""
   "If t, `evedel--restore-file-instructions' becomes inert.
 This is sometimes necessary to prevent various hooks from interfering with the
 instruction restoration process.")
-(defvar e::version "v0.4.9")
 
 (defmacro e::foreach-instruction (binding &rest body)
   "Iterate over `evedel--instructions' with BINDING as the binding.
@@ -152,6 +151,9 @@ handles all the internal bookkeeping and cleanup."
   (cl:with-gensyms (cons bof specific-buffer)
     (let ((instr (if (listp binding) (car binding) binding)))
       `(cl:labels ((clean-alist-entry (cons)
+                     (let ((deleted-instrs (cl:remove-if #'overlay-buffer (cdr cons))))
+                       (mapc (lambda (instr) (e::retire-id (e::instruction-id instr)))
+                             deleted-instrs))
                      (let ((instrs (cl:remove-if-not #'overlay-buffer (cdr cons))))
                        (setf (cdr cons) instrs))))
          (let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
@@ -187,7 +189,7 @@ handles all the internal bookkeeping and cleanup."
 Interactively, or when MESSAGE is non-nil, show it in echo area.  With prefix
 argument, or when HERE is non-nil, insert it at point."
   (interactive (list (or current-prefix-arg 'interactive)))
-  (let ((version e::version))
+  (let ((version "v0.4.10"))
     (cond
      ((or message (called-interactively-p 'any)) (message "Evedel %s" version))
      (here (insert (format "Evedel %s" version)))
@@ -431,8 +433,8 @@ If a region is not selected and there is a directive under the point, send it."
                                          (mapcar (lambda (inst)
                                                    (e::topmost-instruction inst 'directive))
                                                  (e::instructions-in (point-min)
-                                                                            (point-max)
-                                                                            'directive)))))
+                                                                     (point-max)
+                                                                     'directive)))))
           (dolist (dir toplevel-directives)
             (execute dir))
           (message "Sent all directives in current buffer to gptel for processing"))))))
@@ -485,13 +487,13 @@ Throw a user error if no instructions to delete were found."
       do (progn
            (e::delete-instruction instr)
            (cl:incf deleted-instr-count)))
-    (setq e::instructions nil)
     (when (not (zerop deleted-instr-count))
       (message "Deleted %d Evedel instruction%s in %d buffer%s"
                deleted-instr-count
                (if (= 1 deleted-instr-count) "" "s")
                buffer-count
                (if (= 1 buffer-count) "" "s"))))
+  (setq e::instructions nil)
   (e::reset-id-counter))
 
 (defun e:convert-instructions ()
@@ -671,48 +673,68 @@ Adds specificly to REFERENCE if it is non-nil."
         (new-save-file ()))
     (when (string= save-file-version (e:version))
       (cl:return-from e::patch-save-file save-file))
-    (cond
-     ;; Save file is version v0.4.7, the first version with backward compatibility.
-     (t
-      (condition-case err
-          (progn
-            (e::reset-id-counter)
-            (let ((files-alist save-file))
-              (cl:loop for (_ . file-plist) in files-alist
-                       do (let ((instr-plists (plist-get file-plist :instructions)))
-                            (cl:loop for instr-plist in instr-plists
-                                     do (let ((ov-props (plist-get instr-plist :properties)))
-                                          (with-temp-buffer
-                                            (let ((ov (make-overlay 1 1)))
-                                              (mapc (lambda (prop)
-                                                      (overlay-put ov
-                                                                   prop
-                                                                   (plist-get ov-props prop)))
-                                                    ov-props)
-                                              (overlay-put ov 'e:id (e::create-id))
-                                              (plist-put instr-plist
-                                                         :properties
-                                                         (overlay-properties ov))))))))
-              (setf new-save-file (plist-put new-save-file :version (e:version)))
-              (setf new-save-file
-                    (plist-put new-save-file :ids (list :id-counter e::id-counter
-                                                        :used-ids (hash-table-keys e::id-usage-map)
-                                                        :retired-ids e::retired-ids)))
-              (setf new-save-file (plist-put new-save-file :files files-alist))
-              (e::reset-id-counter)))
-        (error
-         (error "Error patching a versionless save file.
+    (cl:labels ((recreate-instr-ids (files-alist)
+                  (let ((e::id-counter 0)
+                        (e::id-usage-map (make-hash-table))
+                        (e::retired-ids ()))
+                    (cl:loop for (_ . file-plist) in files-alist
+                             do (let ((instr-plists (plist-get file-plist :instructions)))
+                                  (cl:loop for instr-plist in instr-plists
+                                           do (let ((ov-props (plist-get instr-plist :properties)))
+                                                (with-temp-buffer
+                                                  (let ((ov (make-overlay 1 1)))
+                                                    (mapc (lambda (prop)
+                                                            (overlay-put ov
+                                                                         prop
+                                                                         (plist-get ov-props prop)))
+                                                          ov-props)
+                                                    (overlay-put ov 'e:id (e::create-id))
+                                                    (plist-put instr-plist
+                                                               :properties
+                                                               (overlay-properties ov))))))))
+                    (cl:values files-alist e::id-counter e::id-usage-map e::retired-ids)))
+                (recreate-id-counter (files-alist)
+                  (cl:multiple-value-bind (files-alist id-counter id-usage-map retired-ids)
+                      (recreate-instr-ids files-alist)
+                    (cl:values
+                     (list :id-counter id-counter
+                           :used-ids (hash-table-keys id-usage-map)
+                           :retired-ids retired-ids)
+                     files-alist))))
+    ;; There is no save file version available.  This means we are using a save file whose version
+    ;; is v0.4.7 or older.  Only v0.4.7 is newer support backward save compatibility.
+    ;;
+    ;; This branch updates version v0.4.7 to the latest version by adding ids to the existing
+    ;; instructions, and changing the save file to include the latest version number and the id
+    ;; counter.
+    (if (null save-file-version)
+        (condition-case err
+            (cl:multiple-value-bind (ids-plist files-alist) (recreate-id-counter save-file)
+              (setq new-save-file (plist-put new-save-file :ids ids-plist))
+              (setq new-save-file (plist-put new-save-file :files files-alist)))
+          (error
+           (error "Error patching a versionless save file.
 
 Save file backward compatibility was added in v0.4.7.  If the save file is older than that, then \
 unfortunately it is no longer supported.  If the save file is from v0.4.7 or newer, then this is a \
 bug that you should report.
 
-The error: %s" err)))))
+The error: %s" err)))
+      (pcase save-file-version
+        ("v0.4.9"
+         ;; v0.4.9 had a problem where overlays which were deleted extrajudicially did not retire
+         ;; their id number, causing the id to be used perpetually.  This patch cleans the used id
+         ;; list.
+         (cl:multiple-value-bind (ids-plist files-alist)
+             (recreate-id-counter (plist-get save-file :files))
+           (setq new-save-file (plist-put new-save-file :ids ids-plist))
+           (setq new-save-file (plist-put new-save-file :files files-alist))))))
     (if new-save-file
         (progn
           (message "Patched loaded save file to version %s" (e:version))
+          (setq new-save-file (plist-put new-save-file :version (e:version)))
           new-save-file)
-      save-file)))
+      save-file))))
 
 (defun e::instruction-id (instruction)
   (overlay-get instruction 'e:id))
@@ -1361,8 +1383,8 @@ non-nil prevents the opening of a prompt buffer."
 
 Returns the deleted instruction overlay."
   (let ((children (e::child-instructions instruction)))
-    (delq instruction (alist-get (overlay-buffer instruction) e::instructions))
-    (e::retire-id (e::instruction-id instruction))
+    ;; Note that we don't want to retire ids here, as they will be retired automatically when the
+    ;; instruction gets cleaned up.
     (delete-overlay instruction)
     (dolist (child children)
       (e::update-instruction-overlay child t)))
@@ -1911,6 +1933,29 @@ The PRED must be a function which accepts an instruction."
                (or (null pred) (funcall pred best-instruction)))
           best-instruction
         nil))))
+
+(defun e::toplevel-instructions (&optional of-type)
+  "Return the global top-level instructions across all buffers.
+
+Returns only instructions of specific type if OF-TYPE is non-nil.
+If OF-TYPE is non-nil, this function does _not_ return the \"next best\"
+instruction of the matching type; i.e., the returned list consists only of
+toplevel instructions that also match the specified type."
+  (e::foreach-instruction instr
+    with toplevels = (make-hash-table)
+    with inferiors = (make-hash-table)
+    unless (or (gethash instr toplevels) (gethash instr inferiors))
+    do (with-current-buffer (overlay-buffer instr)
+         (let* ((instrs (e::instructions-at (overlay-start instr)))
+                (topmost (car (cl:remove-if #'e::parent-instruction instrs)))
+                (children (delq topmost instrs)))
+           (puthash topmost t toplevels)
+           (cl:loop for child in children do (puthash child t inferiors))))
+    finally (cl:return (if of-type
+                           (cl:remove-if-not (lambda (instr)
+                                               (eq (e::instruction-type instr) of-type))
+                                             (hash-table-keys toplevels))
+                         (hash-table-keys toplevels)))))
 
 (defun e::directive-text (directive)
   "Return the directive text of the DIRECTIVE overlay.
