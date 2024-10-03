@@ -826,7 +826,8 @@ The error: %s" err)))
                                                       "\\(:?.+\\)"
                                                       tag-query
                                                       'font-lock-constant-face)
-                                                     nil))))
+                                                     nil))
+                (overlay-put directive 'e:directive-status nil)))
             (e::update-instruction-overlay directive t))
         (error 
          (message (error-message-string err)))))))
@@ -1972,7 +1973,8 @@ Returns an empty string if there is no commentary."
 
 (defun e::read-directive (directive)
   "Prompt user to enter a directive text via minibuffer for DIRECTIVE."
-  (let ((original-directive-text (e::directive-text directive)))
+  (let ((original-directive-text (e::directive-text directive))
+        (original-directive-status (overlay-get directive 'e:directive-status)))
     (minibuffer-with-setup-hook
         (lambda ()
           (add-hook 'minibuffer-exit-hook
@@ -1984,6 +1986,7 @@ Returns an empty string if there is no commentary."
           (add-hook 'after-change-functions
                     (lambda (_beg _end _len)
                       (overlay-put directive 'e:directive (minibuffer-contents))
+                      (overlay-put directive 'e:directive-status nil)
                       (e::update-instruction-overlay directive))
                     nil t))
       (condition-case _err
@@ -1992,6 +1995,7 @@ Returns an empty string if there is no commentary."
          (if (string-empty-p original-directive-text)
              (e::delete-instruction directive)
            (overlay-put directive 'e:directive original-directive-text)
+           (overlay-put directive 'e:directive-status original-directive-status)
            (e::update-instruction-overlay directive nil))
          (signal 'quit nil))))))
 
