@@ -150,11 +150,13 @@ handles all the internal bookkeeping and cleanup."
   ;; "bof" stands for "buffer or file".
   (cl:with-gensyms (cons bof specific-buffer)
     (let ((instr (if (listp binding) (car binding) binding)))
-      `(cl:labels ((clean-alist-entry (cons)
-                     (let ((deleted-instrs (cl:remove-if #'overlay-buffer (cdr cons))))
-                       (mapc (lambda (instr) (e::retire-id (e::instruction-id instr)))
-                             deleted-instrs))
-                     (let ((instrs (cl:remove-if-not #'overlay-buffer (cdr cons))))
+      `(cl:labels ((trashp (instr)
+                     (and (null (overlay-buffer instr))
+                          (not (overlay-get instr 'e:marked-for-deletion))))
+                   (clean-alist-entry (cons)
+                     (mapc (lambda (instr) (e::delete-instruction instr (car cons)))
+                           (cl:remove-if-not #'trashp (cdr cons)))
+                     (let ((instrs (cl:remove-if #'trashp (cdr cons))))
                        (setf (cdr cons) instrs))))
          (let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
            (if (not ,specific-buffer)
@@ -341,6 +343,86 @@ command will resize the directive in the following manner:
     INSIDE the directive) then the directive will be shrunk to the point."
   (interactive)
   (e::create-instruction 'directive))
+
+(defun e:link-instructions (from-list to-list)
+  "Link instructions with ids in FROM-LIST to those in TO-LIST.
+
+When invoked interactively, prompts user for two lists of instruction ids."
+  (interactive
+   (let ((completion-table (mapcar #'number-to-string (hash-table-keys e::id-usage-map))))
+     (list (mapcar #'string-to-number
+                   (completing-read-multiple "Select instruction ids to link: "
+                                             completion-table nil t))
+           (mapcar #'string-to-number
+                   (completing-read-multiple "Select instruction ids to link to: "
+                                             completion-table nil t)))))
+  (cl-labels
+      ((update-links (instr-id num-key update-id)
+         (let* ((instr (e::instruction-with-id instr-id))
+                (links (overlay-get instr 'e:links))
+                (ids (plist-get links num-key)))
+           (unless (member update-id ids)
+             (setq ids (cons update-id ids))
+             (overlay-put instr 'e:links (plist-put links num-key ids))
+             t))))
+    (let ((new-link-count 0)
+          (involved-instrs (make-hash-table)))
+      (dolist (from-id from-list)
+        (when-let ((from-instr (e::instruction-with-id from-id)))
+          (dolist (to-id to-list)
+            (when (/= from-id to-id)
+              (when-let ((to-instr (e::instruction-with-id to-id)))
+                (when (and (update-links from-id :to to-id)
+                           (update-links to-id :from from-id))
+                  (puthash from-instr t involved-instrs)
+                  (puthash to-instr t involved-instrs)
+                  (cl:incf new-link-count)))))))
+      (cl:loop for instr being the hash-keys of involved-instrs
+               do (e::update-instruction-overlay instr))
+      (when (called-interactively-p 'interactive)
+        (message "Created %d instruction link%s"
+                 new-link-count
+                 (if (= new-link-count 1) "" "s"))))))
+
+(defun e:unlink-instructions (from-list to-list)
+  "Unlink instructions with ids in FROM-LIST from those in TO-LIST.
+
+When invoked interactively, prompts user for two lists of instruction ids."
+  (interactive
+   (let ((completion-table (mapcar #'number-to-string (hash-table-keys e::id-usage-map))))
+     (list (mapcar #'string-to-number
+                   (completing-read-multiple "Select instruction ids to unlink: "
+                                             completion-table nil t))
+           (mapcar #'string-to-number
+                   (completing-read-multiple "Select instruction ids to unlink from: "
+                                             completion-table nil t)))))
+  (cl-labels
+      ((remove-links (instr-id num-key remove-id)
+         (let* ((instr (e::instruction-with-id instr-id))
+                (links (overlay-get instr 'e:links))
+                (ids (plist-get links num-key)))
+           (when (member remove-id ids)
+             (setq ids (remove remove-id ids))
+             (overlay-put instr 'e:links (plist-put links num-key ids))
+             t))))
+    (let ((removed-link-count 0)
+          (involved-instrs (make-hash-table)))
+      (dolist (from-id from-list)
+        (when-let ((from-instr (e::instruction-with-id from-id)))
+          (dolist (to-id to-list)
+            (when-let ((to-instr (e::instruction-with-id to-id)))
+              (when (and (remove-links from-id :to to-id)
+                         (remove-links to-id :from from-id))
+                (puthash from-instr t involved-instrs)
+                (puthash to-instr t involved-instrs)
+                (cl:incf removed-link-count))))))
+      (cl:loop for instr being the hash-keys of involved-instrs
+               do (when (buffer-live-p (overlay-buffer instr))
+                    (e::update-instruction-overlay instr)))
+      (when (called-interactively-p 'interactive)
+        (message "Removed %d instruction link%s"
+                 removed-link-count
+                 (if (= removed-link-count 1) "" "s"))))))
 
 (defun e:cycle-instructions-at-point (point)
   "Cycle through instructions at POINT, highlighting them.
@@ -666,6 +748,19 @@ Adds specificly to REFERENCE if it is non-nil."
               (let ((removed (e::remove-tags instr tags-to-remove)))
                 (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
       (user-error "No reference at point"))))
+
+(let ((map (make-hash-table)))
+  (cl:defun e::instruction-with-id (target-id)
+    "Return the instruction with the given integer TARGET-ID.
+
+Returns nil if no instruction with the spcific id was found."
+    (when-let ((instr (gethash target-id map)))
+      (when (buffer-live-p instr)
+        (cl:return-from e::instruction-with-id instr)))
+    (setq map (make-hash-table))
+    (e::foreach-instruction instr
+      do (puthash (e::instruction-id instr) instr map))
+    (gethash target-id map)))
 
 (cl:defun e::patch-save-file (save-file)
   "Return a patched SAVE-FILE that matches the current version."
@@ -1379,16 +1474,32 @@ non-nil prevents the opening of a prompt buffer."
       (e::read-directive ov))
     ov))
 
-(defun e::delete-instruction (instruction)
-  "Delete the INSTRUCTION overlay.
+(defun e::delete-instruction (instruction &optional buffer)
+  "Delete the INSTRUCTION overlay and return it.
 
-Returns the deleted instruction overlay."
-  (let ((children (e::child-instructions instruction)))
-    ;; Note that we don't want to retire ids here, as they will be retired automatically when the
-    ;; instruction gets cleaned up.
-    (delete-overlay instruction)
-    (dolist (child children)
-      (e::update-instruction-overlay child t)))
+If the overlay is already dead, just perform the cleanup.
+BUFFER is required in order to perform cleanup on a dead instruction."
+  ;; We want to handle this function in two different ways.  The first way handles regular deletion,
+  ;; i.e. when the function was invoked on an existing instruction.  The second way is for when the
+  ;; instruction was deleted uncanonically through text manipulation.  In the latter case, the
+  ;; function will be called during a cleanup routine and the instruction will not be alive.
+  (when (overlay-get instruction 'e:marked-for-deletion)
+    (error "Instruction %s already marked for deletion" instruction))
+  (overlay-put instruction 'e:marked-for-deletion t)
+  (cl:labels ((cleanup (instr buffer)
+                (let ((id (e::instruction-id instr)))
+                  (e::retire-id id)
+                  (e:unlink-instructions `(,id) (e::instruction-outlinks instr))
+                  (e:unlink-instructions (e::instruction-inlinks instr) `(,id)))
+                (setf (cdr (assoc buffer e::instructions))
+                      (delq instr (cdr (assoc buffer e::instructions))))))
+    (let ((buffer (or (overlay-buffer instruction) buffer)))
+      (when (buffer-live-p buffer)
+        (let ((children (e::child-instructions instruction)))
+          (delete-overlay instruction)
+          (dolist (child children)
+            (e::update-instruction-overlay child t))))
+      (cleanup instruction (or buffer (error "Cannot perform cleanup without a buffer")))))
   instruction)
 
 (defun e::pos-bol-p (pos buffer)
@@ -1533,9 +1644,39 @@ non-nil."
                                                         (or prefix "")
                                                         padding
                                                         (overlay-buffer instruction)))))
-                  (instr-id-str (instr)
-                    (propertize (format "#%s" (e::instruction-id instr))
-                                'face 'font-lock-constant-face)))
+                  (stylized-id-str (id)
+                    (propertize (format "#%d" id) 'face 'font-lock-constant-face))
+                  (append-links-to-label ()
+                    (cl:labels ((filter-ids (ids)
+                                  (cl:loop for id in ids
+                                           unless
+                                           (let ((instr (e::instruction-with-id id)))
+                                             (or (null instr)
+                                                 (not (eq (e::instruction-type instr)
+                                                          (e::instruction-type instruction)))))
+                                           collect id)))
+                      (let ((outlinks (filter-ids (e::instruction-outlinks instruction)))
+                            (inlinks (filter-ids (e::instruction-inlinks instruction))))
+                        (when (or outlinks inlinks)
+                          (let ((prefix (format "%s LINKS: "
+                                                (if (e::referencep instruction)
+                                                    "REFERENCE"
+                                                  "DIRECTIVE")))
+                                (link-list-text
+                                 (concat
+                                  (when outlinks
+                                    (format "TO: %s"
+                                            (string-join (mapcar #'stylized-id-str
+                                                                 outlinks)
+                                                         ", ")))
+                                  (when inlinks
+                                    (format "%sFROM: %s"
+                                            (if outlinks "\n" "")
+                                            (string-join (mapcar #'stylized-id-str
+                                                                 inlinks)
+                                                         ", "))))))
+                            (append-to-label link-list-text
+                                             prefix)))))))
                (pcase instruction-type
                  ('reference ; REFERENCE
                   (setq color e:reference-color)
@@ -1543,12 +1684,12 @@ non-nil."
                            (and (eq (e::instruction-type parent) 'reference)
                                 (not parent-bufferlevel)))
                       (append-to-label (format "SUBREFERENCE %s"
-                                               (instr-id-str instruction)))
+                                               (stylized-id-str (e::instruciton-id instruction))))
                     (if is-bufferlevel
                         (append-to-label (format "BUFFER REFERENCE %s"
-                                                 (instr-id-str instruction)))
+                                                 (stylized-id-str (e::instruction-id instruction))))
                       (append-to-label (format "REFERENCE %s"
-                                               (instr-id-str instruction)))))
+                                               (stylized-id-str (e::instruction-id instruction))))))
                   (let* ((direct-tags (e::reference-tags instruction))
                          (inherited-tags (e::inherited-tags instruction))
                          (common-tags (cl:intersection inherited-tags direct-tags))
@@ -1577,11 +1718,12 @@ non-nil."
                                              (if common-tags
                                                  "UNIQUE TAGS: "
                                                "DIRECT TAGS: ")
-                                           "TAGS: "))))
-                    (let ((commentary (string-trim (or (e::commentary-text instruction)
-                                                       ""))))
-                      (unless (string-empty-p commentary)
-                        (append-to-label commentary "COMMENTARY: ")))))
+                                           "TAGS: ")))))
+                  (append-links-to-label)
+                  (let ((commentary (string-trim (or (e::commentary-text instruction)
+                                                     ""))))
+                    (unless (string-empty-p commentary)
+                      (append-to-label commentary "COMMENTARY: "))))
                ('directive ; DIRECTIVE
                 (when (and (null topmost-directive) (overlay-get instruction
                                                                  'e:directive-status))
@@ -1596,9 +1738,12 @@ non-nil."
                 (let (sublabel)
                   (if (and parent
                            (e::directivep parent))
-                      (setq sublabel (format "DIRECTIVE HINT %s" (instr-id-str instruction)))
-                    (setq sublabel (concat sublabel (format "DIRECTIVE %s"
-                                                            (instr-id-str instruction)))))
+                      (setq sublabel (format "DIRECTIVE HINT %s"
+                                             (stylized-id-str (e::instruction-id instruction))))
+                    (setq sublabel (concat
+                                    sublabel
+                                    (format "DIRECTIVE %s"
+                                            (stylized-id-str (e::instruction-id instruction))))))
                   (let ((directive (string-trim (or (overlay-get instruction 'e:directive)
                                                     ""))))
                     (if (string-empty-p directive)
@@ -1622,7 +1767,8 @@ non-nil."
                             (if e:always-match-untagged-references
                                 (setq matchinfo "REFERENCES UNTAGGED ONLY")
                               (setq matchinfo "REFERENCES NOTHING")))
-                          (setq label (concat label "\n" padding matchinfo)))))))))
+                          (setq label (concat label "\n" padding matchinfo))))
+                      (append-links-to-label))))))
              (let* ((default-fg (face-foreground 'default))
                     (default-bg (face-background 'default))
                     (bg-tint-intensity
@@ -2442,6 +2588,14 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
   (setq e::id-counter 0)
   (setq e::id-usage-map (make-hash-table))
   (setq e::retired-ids ()))
+
+(defun e::instruction-outlinks (instruction)
+  "Return the :to links of INSTRUCTION."
+  (plist-get (overlay-get instruction 'e:links) :to))
+
+(defun e::instruction-inlinks (instruction)
+  "Return the :from links of INSTRUCTION."
+  (plist-get (overlay-get instruction 'e:links) :from))
 
 (add-hook 'find-file-hook
           (lambda ()
