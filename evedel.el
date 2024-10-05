@@ -3,7 +3,7 @@
 ;; Copyright (C) 2024  daedsidog
 
 ;; Author: daedsidog <contact@daedsidog.com>
-;; Version: 0.4.10
+;; Version: 0.4.12
 ;; Keywords: convenience, tools
 ;; Package-Requires: ((emacs "29.1") (gptel "0.9.0"))
 ;; URL: https://github.com/daedsidog/evedel
@@ -191,7 +191,7 @@ handles all the internal bookkeeping and cleanup."
 Interactively, or when MESSAGE is non-nil, show it in echo area.  With prefix
 argument, or when HERE is non-nil, insert it at point."
   (interactive (list (or current-prefix-arg 'interactive)))
-  (let ((version "v0.4.10"))
+  (let ((version "v0.4.12"))
     (cond
      ((or message (called-interactively-p 'any)) (message "Evedel %s" version))
      (here (insert (format "Evedel %s" version)))
@@ -824,7 +824,9 @@ The error: %s" err)))
              (recreate-id-counter (plist-get save-file :files))
            (setq new-save-file (plist-put new-save-file :ids ids-plist))
            (setq new-save-file (plist-put new-save-file :files files-alist))))
-        (_ (warn "'%s' is not a known or supported Evedel save file version" save-file-version))))
+        ;; Save file is a newer version, but needs no patching.  We would still like to display
+        ;; a message indicating that the file underwent a patching procedure.
+        (_ (setq new-save-file save-file))))
     (if new-save-file
         (progn
           (message "Patched loaded save file to version %s" (e:version))
