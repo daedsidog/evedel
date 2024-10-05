@@ -823,7 +823,8 @@ The error: %s" err)))
          (cl:multiple-value-bind (ids-plist files-alist)
              (recreate-id-counter (plist-get save-file :files))
            (setq new-save-file (plist-put new-save-file :ids ids-plist))
-           (setq new-save-file (plist-put new-save-file :files files-alist))))))
+           (setq new-save-file (plist-put new-save-file :files files-alist))))
+        (_ (warn "'%s' is not a known or supported Evedel save file version" save-file-version))))
     (if new-save-file
         (progn
           (message "Patched loaded save file to version %s" (e:version))
@@ -1493,13 +1494,15 @@ BUFFER is required in order to perform cleanup on a dead instruction."
                   (e:unlink-instructions (e::instruction-inlinks instr) `(,id)))
                 (setf (cdr (assoc buffer e::instructions))
                       (delq instr (cdr (assoc buffer e::instructions))))))
-    (let ((buffer (or (overlay-buffer instruction) buffer)))
-      (when (buffer-live-p buffer)
+    (let ((ov-buffer (overlay-buffer instruction)))
+      (when (buffer-live-p ov-buffer)
         (let ((children (e::child-instructions instruction)))
           (delete-overlay instruction)
           (dolist (child children)
             (e::update-instruction-overlay child t))))
-      (cleanup instruction (or buffer (error "Cannot perform cleanup without a buffer")))))
+      (cleanup instruction (or ov-buffer
+                               buffer
+                               (error "Cannot perform cleanup without a buffer")))))
   instruction)
 
 (defun e::pos-bol-p (pos buffer)
@@ -1684,7 +1687,7 @@ non-nil."
                            (and (eq (e::instruction-type parent) 'reference)
                                 (not parent-bufferlevel)))
                       (append-to-label (format "SUBREFERENCE %s"
-                                               (stylized-id-str (e::instruciton-id instruction))))
+                                               (stylized-id-str (e::instruction-id instruction))))
                     (if is-bufferlevel
                         (append-to-label (format "BUFFER REFERENCE %s"
                                                  (stylized-id-str (e::instruction-id instruction))))
@@ -2272,6 +2275,15 @@ A toplevel reference instruction is one that has no parents."
   (let ((lines (split-string input-string "\n")))
     (mapconcat (lambda (line) (concat "> " line)) lines "\n")))
 
+(cl:defun e::ancestral-instructions (instruction &optional of-type)
+  "Return a list of ancestors for the current INSTRUCTION."
+  (if-let ((parent (e::parent-instruction instruction)))
+      (if (or (null of-type)
+              (eq (e::instruction-type parent) of-type))
+          (cons parent (e::ancestral-instructions parent of-type))
+        (e::ancestral-instructions parent of-type))
+    nil))
+
 (defun e::directive-llm-prompt (directive)
   "Craft the prompt for the LLM model associated with the DIRECTIVE.
 
@@ -2289,14 +2301,52 @@ Returns the prompt as a string."
          (toplevel-references (e::foreach-instruction instr
                                 when (and (e::referencep instr)
                                           (eq (e::topmost-instruction instr 'reference pred)
-                                              instr)
-                                          ;; We do not wish to collect references that are
-                                          ;; contained within directives, it's redundant.
-                                          (not (e::subinstruction-of-p instr directive)))
+                                              instr))
                                 collect instr))
+         (linked-refs (let ((visited-refs (make-hash-table))
+                            (independent-refs ())
+                            (child-refmap
+                             (let ((ht (make-hash-table)))
+                               (cl:loop
+                                for tlr in toplevel-references
+                                do (cl:loop
+                                    for instr
+                                    in (e::wholly-contained-instructions (overlay-buffer tlr)
+                                                                         (overlay-start tlr)
+                                                                         (overlay-end tlr))
+                                    when (and (not (eq instr tlr))
+                                              (e::referencep instr))
+                                    do (puthash instr t ht)))
+                               ht)))
+                        (cl:labels ((collect-linked-references-recursively (ref)
+                                      (puthash ref t visited-refs)
+                                      (dolist (linked-id (e::instruction-outlinks ref))
+                                        (let ((linked-ref (e::instruction-with-id linked-id)))
+                                          (when (and linked-ref
+                                                     (e::referencep linked-ref)
+                                                     (not (gethash linked-ref visited-refs)))
+                                            (unless (gethash linked-ref child-refmap)
+                                              (push linked-ref independent-refs))
+                                            (collect-linked-references-recursively linked-ref))))))
+                          (mapc #'collect-linked-references-recursively
+                                (cl:remove-duplicates
+                                 (append (e::ancestral-instructions directive
+                                                                    'reference)
+                                         toplevel-references
+                                         (flatten-tree
+                                          (mapcar (lambda (instr)
+                                                    (e::ancestral-instructions instr
+                                                                               'reference))
+                                                  toplevel-references)))))
+                          independent-refs)))
+         ;; We want to remove references that are contained inside the directive, as collecting them
+         ;; provides us with no additional context for the prompt.
+         (total-refs (cl:remove-if (lambda (ref)
+                                     (e::subinstruction-of-p directive ref))
+                                   (cl:union toplevel-references linked-refs)))
          ;; The references in the reference alist should be sorted by their order of appearance
          ;; in the buffer.
-         (reference-alist (cl:loop for reference in toplevel-references with alist = ()
+         (reference-alist (cl:loop for reference in total-refs with alist = ()
                                    do (push reference (alist-get (overlay-buffer reference) alist))
                                    finally (progn
                                              (cl:loop for (_ . references) in alist
@@ -2305,7 +2355,7 @@ Returns the prompt as a string."
                                                                  (< (overlay-start x)
                                                                     (overlay-start y)))))
                                              (cl:return alist))))
-         (reference-count (length toplevel-references))
+         (reference-count (length total-refs))
          (toplevel-directive-is-empty (string-empty-p (e::directive-text directive)))
          (directive-toplevel-reference (e::topmost-instruction directive 'reference pred))
          (directive-buffer (overlay-buffer directive))
@@ -2326,11 +2376,12 @@ Returns the prompt as a string."
                              with hashset = (make-hash-table)
                              unless (gethash ref hashset)
                              do (puthash ref t hashset)
-                             and count ref into refnum
                              and concat (cl:destructuring-bind (ref-info-string _)
                                         (e::overlay-region-info ref)
-                                        (format "\n\nCommentary #%d for %s:\n\n%s"
-                                                refnum
+                                        (format "\n\nCommentary from reference #%d in buffer `%s` \
+for %s:\n\n%s"
+                                                (e::instruction-id ref)
+                                                (overlay-buffer ref)
                                                 ref-info-string
                                                 (e::markdown-enquote (e::commentary-text ref))))
                              into commentary
@@ -2439,9 +2490,10 @@ blocks. A response without Markdown code blocks is invalidated, and its contents
 to the user as a failure reason. Be very strict, and announce failure even at the slightest \
 discrepancy."
             (unless (zerop reference-count)
-              (format "\n\n## Reference%s%s"
-                      (if (> reference-count 1) "s" "")
-                      (if directive-toplevel-reference " & Directive" "")))))
+              (concat
+               (format "\n\n## Reference%s%s"
+                       (if (> reference-count 1) "s" "")
+                       (if directive-toplevel-reference " & Directive" ""))))))
           (cl:loop for (buffer . references) in reference-alist
                    do (insert
                        (concat
@@ -2459,7 +2511,9 @@ discrepancy."
                          (insert
                           (concat
                            "\n\n"
-                           (format "Reference in %s%s"
+                           (format "#### Reference #%d" (e::instruction-id ref))
+                           "\n\n"
+                           (format "In %s%s"
                                    ref-info-string
                                    (if (eq ref directive-toplevel-reference)
                                        (format " with embedded directive in %s:"
@@ -2479,7 +2533,7 @@ discrepancy."
                            (let ((commentary (e::commentary-text ref)))
                              (unless (string-empty-p commentary)
                                (puthash ref t used-commentary-refs)
-                               (format "\n\nReference commentary:\n\n%s"
+                               (format "\n\nCommentary:\n\n%s"
                                        (e::markdown-enquote commentary))))))))))
           (let ((directive-commentators (unreferenced-ancestral-commentators directive)))
             (when (or directive-commentators reference-commentators)
