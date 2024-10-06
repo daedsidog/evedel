@@ -2345,7 +2345,7 @@ Returns the prompt as a string."
          ;; We want to remove references that are contained inside the directive, as collecting them
          ;; provides us with no additional context for the prompt.
          (total-refs (cl:remove-if (lambda (ref)
-                                     (e::subinstruction-of-p directive ref))
+                                     (e::subinstruction-of-p ref directive))
                                    (cl:union toplevel-references linked-refs)))
          ;; The references in the reference alist should be sorted by their order of appearance
          ;; in the buffer.
