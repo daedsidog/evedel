@@ -1375,22 +1375,28 @@ Instruction type can either be `reference' or `directive'."
   "Create an overlay in BUFFER from START to END of the lines."
   (make-local-variable 'e::after-change-functions-hooked)
   (with-current-buffer buffer
-    (let ((overlay (make-overlay start end)))
-      (overlay-put overlay 'e:instruction t)
-      (overlay-put overlay 'e:id (e::create-id))
-      (push overlay (alist-get buffer e::instructions))
-      (unless (bound-and-true-p e::after-change-functions-hooked)
-        (setq-local e::after-change-functions-hooked t)
-        (add-hook 'after-change-functions
-                  (lambda (beg end _len)
-                    (let ((beg (max (point-min) (1- beg)))
-                          (end (min (point-max) (1+ end))))
-                      (let ((affected-instructions (e::instructions-in beg end)))
-                        (dolist (instruction affected-instructions)
-                          (e::update-instruction-overlay instruction)))))
-                  nil t))
-      (e::setup-buffer-hooks buffer)
-      overlay)))
+    (let ((is-bufferlevel
+           ;; Check if the overlay spans the start and end of the buffer.  If it does, make it
+           ;; sticky so that additions to edges of the buffer will cause it to expand there.  This
+           ;; is useful for when we want to append new text to the end of the buffer but don't want
+           ;; to "invalidate" the buffer-level status of the instruction.
+           (and (= start (point-min)) (= end (point-max)))))
+      (let ((overlay (make-overlay start end (current-buffer) nil is-bufferlevel)))
+        (overlay-put overlay 'e:instruction t)
+        (overlay-put overlay 'e:id (e::create-id))
+        (push overlay (alist-get buffer e::instructions))
+        (unless (bound-and-true-p e::after-change-functions-hooked)
+          (setq-local e::after-change-functions-hooked t)
+          (add-hook 'after-change-functions
+                    (lambda (beg end _len)
+                      (let ((beg (max (point-min) (1- beg)))
+                            (end (min (point-max) (1+ end))))
+                        (let ((affected-instructions (e::instructions-in beg end)))
+                          (dolist (instruction affected-instructions)
+                            (e::update-instruction-overlay instruction)))))
+                    nil t))
+        (e::setup-buffer-hooks buffer)
+        overlay))))
 
 (defun e::instruction-p (overlay)
   "Return non-nil if OVERLAY is an instruction overlay."
@@ -1659,13 +1665,13 @@ non-nil."
                                            (let ((instr (e::instruction-with-id id)))
                                              (or (null instr)
                                                  (not (eq (e::instruction-type instr)
-                                                          (e::instruction-type instruction)))))
+                                                          instruction-type))))
                                            collect id)))
                       (let ((outlinks (filter-ids (e::instruction-outlinks instruction)))
                             (inlinks (filter-ids (e::instruction-inlinks instruction))))
                         (when (or outlinks inlinks)
                           (let ((prefix (format "%s LINKS: "
-                                                (if (e::referencep instruction)
+                                                (if (eq instruction-type instruction)
                                                     "REFERENCE"
                                                   "DIRECTIVE")))
                                 (link-list-text
@@ -1794,7 +1800,7 @@ non-nil."
                                      tint)))
                     ;; We want to make sure that the buffer-level instructions don't superfluously
                     ;; tint the background.
-                    (bg-color (if is-bufferlevel
+                    (bg-color (if (and is-bufferlevel (eq instruction-type 'reference))
                                   default-bg
                                 (let ((tint (e::tint default-bg
                                                      color
