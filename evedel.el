@@ -99,7 +99,10 @@ a search query will not use any references."
 When set to t, untagged references are always incorporated into directive
 references, ensuring comprehensive coverage.  Conversely, when set to nil,
 untagged references are ignored, unless `evedel-empty-tag-query-matches-all'
-is set to t."
+is set to t.
+
+A reference is considered untagged when it has no direct tags.  References can
+inherit tags from ancestor references and still be considered untagged."
   :type 'boolean)
 
 (defcustom e:patch-outdated-instructions t
@@ -950,10 +953,11 @@ The error: %s" err)))
     (if (and (null atoms) e:empty-tag-query-matches-all)
         t
       (let ((tags (e::reference-tags reference t))
+            (direct-tags (e::reference-tags reference nil))
             (instr-id (lambda (tag) (let ((tagname (symbol-name tag)))
                                       (when (string-match "^id:\\([1-9][0-9]*\\)$" tagname)
                                         (string-to-number (match-string 1 tagname)))))))
-        (if (and (null tags) e:always-match-untagged-references)
+        (if (and (null direct-tags) e:always-match-untagged-references)
             t
           (let ((atom-bindings (mapcar (lambda (atom)
                                          (pcase atom
