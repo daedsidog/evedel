@@ -1664,13 +1664,13 @@ non-nil."
                                            (let ((instr (e::instruction-with-id id)))
                                              (or (null instr)
                                                  (not (eq (e::instruction-type instr)
-                                                          (e::instruction-type instruction)))))
+                                                          instruction-type))))
                                            collect id)))
                       (let ((outlinks (filter-ids (e::instruction-outlinks instruction)))
                             (inlinks (filter-ids (e::instruction-inlinks instruction))))
                         (when (or outlinks inlinks)
                           (let ((prefix (format "%s LINKS: "
-                                                (if (e::referencep instruction)
+                                                (if (eq instruction-type instruction)
                                                     "REFERENCE"
                                                   "DIRECTIVE")))
                                 (link-list-text
@@ -1799,7 +1799,7 @@ non-nil."
                                      tint)))
                     ;; We want to make sure that the buffer-level instructions don't superfluously
                     ;; tint the background.
-                    (bg-color (if is-bufferlevel
+                    (bg-color (if (and is-bufferlevel (eq instruction-type 'reference))
                                   default-bg
                                 (let ((tint (e::tint default-bg
                                                      color
