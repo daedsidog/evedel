@@ -1,6 +1,6 @@
 ;;; evedel.el --- Instructed LLM programmer/assistant for Emacs -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024  daedsidog
+;; Copyright (C) 2024 daedsidog
 
 ;; Author: daedsidog <contact@daedsidog.com>
 ;; Version: 0.4.10
@@ -79,7 +79,7 @@
 (defcustom e:subinstruction-tint-coefficient 0.4
   "Coeffecient multiplied by by tint intensities.
 
-Only applicable to the subinstructions. Makes it possible to have more a
+Only applicable to the subinstructions.  Makes it possible to have more a
 more finely-tuned control over how tinting looks.
 
 Does not affect the label colors, just the backgrounds."
@@ -89,7 +89,7 @@ Does not affect the label colors, just the backgrounds."
   "Determines behavior of directives without a tag search query.
 
 If set to t, directives without a specific tag search query will use all
-available references.  Alternatively, if this is set to nil, directives without 
+available references.  Alternatively, if this is set to nil, directives without
 a search query will not use any references."
   :type 'boolean)
 
@@ -130,7 +130,9 @@ Answers the question \"who is the model?\""
   "If t, `evedel--restore-file-instructions' becomes inert.
 This is sometimes necessary to prevent various hooks from interfering with the
 instruction restoration process.")
-(defvar e::version "v0.4.10")
+(defvar e::id-counter 0)
+(defvar e::id-usage-map (make-hash-table))
+(defvar e::retired-ids ())
 
 (defmacro e::foreach-instruction (binding &rest body)
   "Iterate over `evedel--instructions' with BINDING as the binding.
@@ -148,7 +150,7 @@ The purpose of this macro is to be able to iterate over instructions
 while also making sure that the iterated instructions are valid, i.e.
 have an associated buffer to the overlay.
 
-This macro is the preferred way to iterate over instructions, as it 
+This macro is the preferred way to iterate over instructions, as it
 handles all the internal bookkeeping and cleanup."
   (declare (indent 1))
   ;; "bof" stands for "buffer or file".
@@ -1204,7 +1206,7 @@ Returns the deleted instruction overlay."
 (defun e::directive-empty-p (directive)
   "Check if DIRECTIVE is empty.
 
-A directive is empty if it does not have a body or hints."
+A directive is empty if it does not have a body or secondary directives."
   (let ((subdirectives
          (cl:remove-if-not #'e::directivep
                            (e::wholly-contained-instructions (overlay-buffer directive)
@@ -1469,14 +1471,6 @@ BODYLESS controls special formatting if non-nil.
 
 DIRECTIVE-TEXT is used as the default directive.  Having DIRECTIVE-TEXT be
 non-nil prevents the opening of a prompt buffer."
-  ;; Reset existing directive overlay from non-default state.
-  (when-let ((topmost-directive (e::topmost-instruction (e::highest-priority-instruction
-                                                         (e::instructions-at start 'directive))
-                                                        'directive)))
-    (let ((directive-status (overlay-get topmost-directive 'e:directive-status)))
-      (unless (null directive-status)
-        (overlay-put topmost-directive 'e:directive-status nil)
-        (e::update-instruction-overlay topmost-directive t))))
   (let ((ov (e::create-instruction-overlay-in buffer start end)))
     (unless bodyless
       (overlay-put ov 'evaporate t))
@@ -1628,122 +1622,121 @@ wish to reflect.
 
 Also updates the child instructions of the INSTRUCTION, if UPDATE-CHILDREN is
 non-nil."
-  (let ((topmost-directive nil))
-    (cl:labels
-        ((directive-color (directive)
-           (pcase (overlay-get (if topmost-directive
-                                   topmost-directive
-                                 directive)
-                               'e:directive-status)
-             ('processing e:directive-processing-color)
-             ('succeeded  e:directive-success-color)
-             ('failed     e:directive-fail-color)
-             (_           e:directive-color)))
-         (aux (instruction &optional update-children priority (parent nil))
-           (let* ((instruction-type (e::instruction-type instruction))
-                  (padding (with-current-buffer (overlay-buffer instruction)
-                             (save-excursion
-                               (goto-char (overlay-start instruction))
-                               (make-string (current-column) ? ))))
-                  (is-bufferlevel (e::instruction-bufferlevel-p instruction))
-                  (parent-bufferlevel (and parent (e::instruction-bufferlevel-p parent)))
-                  ;; This is to prevent the buffer-level instruction from having a background color.
-                  (priority (if is-bufferlevel (1- priority) priority))
-                  (label "")
-                  color)
-             (cl:labels
-                 ((append-to-label (content &optional prefix)
-                    (setq label
-                          (concat label
-                                  (if (string-empty-p label) "" (concat "\n" padding))
-                                  (e::fill-label-string content
-                                                        (or prefix "")
-                                                        padding
-                                                        (overlay-buffer instruction)))))
-                  (stylized-id-str (id)
-                    (propertize (format "#%d" id) 'face 'font-lock-constant-face))
-                  (append-links-to-label ()
-                    (cl:labels ((filter-ids (ids)
-                                  (cl:loop for id in ids
-                                           unless
-                                           (let ((instr (e::instruction-with-id id)))
-                                             (or (null instr)
-                                                 (not (eq (e::instruction-type instr)
-                                                          instruction-type))))
-                                           collect id)))
-                      (let ((outlinks (filter-ids (e::instruction-outlinks instruction)))
-                            (inlinks (filter-ids (e::instruction-inlinks instruction))))
-                        (when (or outlinks inlinks)
-                          (let ((prefix (format "%s LINKS: "
-                                                (if (eq instruction-type instruction)
-                                                    "REFERENCE"
-                                                  "DIRECTIVE")))
-                                (link-list-text
-                                 (concat
-                                  (when outlinks
-                                    (format "TO: %s"
-                                            (string-join (mapcar #'stylized-id-str
-                                                                 outlinks)
-                                                         ", ")))
-                                  (when inlinks
-                                    (format "%sFROM: %s"
-                                            (if outlinks "\n" "")
-                                            (string-join (mapcar #'stylized-id-str
-                                                                 inlinks)
-                                                         ", "))))))
-                            (append-to-label link-list-text
-                                             prefix)))))))
-               (pcase instruction-type
-                 ('reference ; REFERENCE
-                  (setq color e:reference-color)
-                  (if (and parent
-                           (and (eq (e::instruction-type parent) 'reference)
-                                (not parent-bufferlevel)))
-                      (append-to-label (format "SUBREFERENCE %s"
+  (cl:labels
+      ((directive-color (directive)
+         (cl:labels ((dircol ()
+                       (pcase (overlay-get directive 'e:directive-status)
+                         ('processing e:directive-processing-color)
+                         ('succeeded  e:directive-success-color)
+                         ('failed     e:directive-fail-color)
+                         (_           e:directive-color))))
+           (if-let ((parent-directive (e::parent-instruction directive 'directive)))
+               (if (eq (overlay-get parent-directive 'e:directive-status) 'processing)
+                   e:directive-processing-color
+                 (dircol))
+             (dircol))))
+       (aux (instruction &optional update-children priority (parent nil))
+         (let* ((instruction-type (e::instruction-type instruction))
+                (padding (with-current-buffer (overlay-buffer instruction)
+                           (save-excursion
+                             (goto-char (overlay-start instruction))
+                             (make-string (current-column) ? ))))
+                (is-bufferlevel (e::instruction-bufferlevel-p instruction))
+                (parent-bufferlevel (and parent (e::instruction-bufferlevel-p parent)))
+                ;; This is to prevent the buffer-level instruction from having a background color.
+                (priority (if is-bufferlevel (1- priority) priority))
+                (label "")
+                color)
+           (cl:labels
+               ((append-to-label (content &optional prefix)
+                  (setq label
+                        (concat label
+                                (if (string-empty-p label) "" (concat "\n" padding))
+                                (e::fill-label-string content
+                                                      (or prefix "")
+                                                      padding
+                                                      (overlay-buffer instruction)))))
+                (stylized-id-str (id)
+                  (propertize (format "#%d" id) 'face 'font-lock-constant-face))
+                (append-links-to-label ()
+                  (cl:labels ((filter-ids (ids)
+                                (cl:loop for id in ids
+                                         unless
+                                         (let ((instr (e::instruction-with-id id)))
+                                           (or (null instr)
+                                               (not (eq (e::instruction-type instr)
+                                                        instruction-type))))
+                                         collect id)))
+                    (let ((outlinks (filter-ids (e::instruction-outlinks instruction)))
+                          (inlinks (filter-ids (e::instruction-inlinks instruction))))
+                      (when (or outlinks inlinks)
+                        (let ((prefix (format "%s LINKS: "
+                                              (if (eq instruction-type instruction)
+                                                  "REFERENCE"
+                                                "DIRECTIVE")))
+                              (link-list-text
+                               (concat
+                                (when outlinks
+                                  (format "TO: %s"
+                                          (string-join (mapcar #'stylized-id-str
+                                                               outlinks)
+                                                       ", ")))
+                                (when inlinks
+                                  (format "%sFROM: %s"
+                                          (if outlinks "\n" "")
+                                          (string-join (mapcar #'stylized-id-str
+                                                               inlinks)
+                                                       ", "))))))
+                          (append-to-label link-list-text
+                                           prefix)))))))
+             (pcase instruction-type
+               ('reference ; REFERENCE
+                (setq color e:reference-color)
+                (if (and parent
+                         (and (eq (e::instruction-type parent) 'reference)
+                              (not parent-bufferlevel)))
+                    (append-to-label (format "SUBREFERENCE %s"
+                                             (stylized-id-str (e::instruction-id instruction))))
+                  (if is-bufferlevel
+                      (append-to-label (format "BUFFER REFERENCE %s"
                                                (stylized-id-str (e::instruction-id instruction))))
-                    (if is-bufferlevel
-                        (append-to-label (format "BUFFER REFERENCE %s"
-                                                 (stylized-id-str (e::instruction-id instruction))))
-                      (append-to-label (format "REFERENCE %s"
-                                               (stylized-id-str (e::instruction-id instruction))))))
-                  (let* ((direct-tags (e::reference-tags instruction))
-                         (inherited-tags (e::inherited-tags instruction))
-                         (common-tags (cl:intersection inherited-tags direct-tags))
-                         (unique-tags (cl:set-difference direct-tags common-tags)))
-                    (cl:labels
-                        ((propertized-string-from-tags (tags)
-                           (string-join
-                            (mapcar (lambda (tag)
-                                      (propertize (symbol-name tag)
-                                                  'face
-                                                  (if (memq tag common-tags)
-                                                      'font-lock-warning-face
-                                                    'font-lock-constant-face)))
-                                    tags)
-                            " ")))
-                      (when inherited-tags
-                        (append-to-label (propertized-string-from-tags
-                                          (sort (append inherited-tags) #'string-lessp))
-                                         (if common-tags
-                                             "INHERITED & COMMON TAGS: "
-                                           "INHERITED TAGS: ")))
-                      (when unique-tags
-                        (append-to-label (propertized-string-from-tags
-                                          (sort unique-tags #'string-lessp))
-                                         (if inherited-tags
-                                             (if common-tags
-                                                 "UNIQUE TAGS: "
-                                               "DIRECT TAGS: ")
-                                           "TAGS: ")))))
-                  (append-links-to-label)
-                  (let ((commentary (string-trim (or (e::commentary-text instruction)
-                                                     ""))))
-                    (unless (string-empty-p commentary)
-                      (append-to-label commentary "COMMENTARY: "))))
+                    (append-to-label (format "REFERENCE %s"
+                                             (stylized-id-str (e::instruction-id instruction))))))
+                (let* ((direct-tags (e::reference-tags instruction))
+                       (inherited-tags (e::inherited-tags instruction))
+                       (common-tags (cl:intersection inherited-tags direct-tags))
+                       (unique-tags (cl:set-difference direct-tags common-tags)))
+                  (cl:labels
+                      ((propertized-string-from-tags (tags)
+                         (string-join
+                          (mapcar (lambda (tag)
+                                    (propertize (symbol-name tag)
+                                                'face
+                                                (if (memq tag common-tags)
+                                                    'font-lock-warning-face
+                                                  'font-lock-constant-face)))
+                                  tags)
+                          " ")))
+                    (when inherited-tags
+                      (append-to-label (propertized-string-from-tags
+                                        (sort (append inherited-tags) #'string-lessp))
+                                       (if common-tags
+                                           "INHERITED & COMMON TAGS: "
+                                         "INHERITED TAGS: ")))
+                    (when unique-tags
+                      (append-to-label (propertized-string-from-tags
+                                        (sort unique-tags #'string-lessp))
+                                       (if inherited-tags
+                                           (if common-tags
+                                               "UNIQUE TAGS: "
+                                             "DIRECT TAGS: ")
+                                         "TAGS: ")))))
+                (append-links-to-label)
+                (let ((commentary (string-trim (or (e::commentary-text instruction)
+                                                   ""))))
+                  (unless (string-empty-p commentary)
+                    (append-to-label commentary "COMMENTARY: "))))
                ('directive ; DIRECTIVE
-                (when (and (null topmost-directive) (overlay-get instruction
-                                                                 'e:directive-status))
-                  (setq topmost-directive instruction))
                 (pcase (overlay-get instruction 'e:directive-status)
                   ('processing (append-to-label "PROCESSING"))
                   ('succeeded (append-to-label "SUCCEEDED"))
@@ -1751,15 +1744,18 @@ non-nil."
                                                          'e:directive-fail-reason)
                                             "FAILED: ")))
                 (setq color (directive-color instruction))
-                (let (sublabel)
+                (let (sublabel
+                      (directive-typename "DIRECTIVE"))
                   (if (and parent
                            (e::directivep parent))
-                      (setq sublabel (format "DIRECTIVE HINT %s"
-                                             (stylized-id-str (e::instruction-id instruction))))
-                    (setq sublabel (concat
-                                    sublabel
-                                    (format "DIRECTIVE %s"
-                                            (stylized-id-str (e::instruction-id instruction))))))
+                      (if (overlay-get parent 'e:directive-status)
+                          (setq directive-typename "CORRECTION")
+                        (setq directive-typename "DIRECTIVE HINT")))
+                  (setq sublabel (concat
+                                  sublabel
+                                  (format "%s %s"
+                                          directive-typename
+                                          (stylized-id-str (e::instruction-id instruction)))))
                   (let ((directive (string-trim (or (overlay-get instruction 'e:directive)
                                                     ""))))
                     (if (string-empty-p directive)
@@ -1879,22 +1875,22 @@ non-nil."
                             (buffer-string))))
                      (overlay-put instruction 'before-string before-string))))
                (overlay-put instruction 'face `(:extend t :background ,bg-color)))
-           (when update-children
-             (dolist (child (e::child-instructions instruction))
-               (aux child update-children (1+ priority) instruction)))))))
-      (let ((instructions-conflicting (cl:some (lambda (instr)
-                                                 (and (not (eq instr instruction))
-                                                      (e::instructions-congruent-p instruction
-                                                                                   instr)))
-                                               (e::instructions-at (overlay-start instruction)))))
-        (if instructions-conflicting
-            ;; This instruction is causing conflicts, and therefore must be deleted.
-            (e::delete-instruction instruction)
-          (let ((parent (e::parent-instruction instruction)))
-            (let ((priority (if parent
-                                (1+ (overlay-get parent 'priority))
-                              e::default-instruction-priority)))
-              (aux instruction update-children priority parent))))))))
+             (when update-children
+               (dolist (child (e::child-instructions instruction))
+                 (aux child update-children (1+ priority) instruction)))))))
+    (let ((instructions-conflicting (cl:some (lambda (instr)
+                                               (and (not (eq instr instruction))
+                                                    (e::instructions-congruent-p instruction
+                                                                                 instr)))
+                                             (e::instructions-at (overlay-start instruction)))))
+      (if instructions-conflicting
+          ;; This instruction is causing conflicts, and therefore must be deleted.
+          (e::delete-instruction instruction)
+        (let ((parent (e::parent-instruction instruction)))
+          (let ((priority (if parent
+                              (1+ (overlay-get parent 'priority))
+                            e::default-instruction-priority)))
+            (aux instruction update-children priority parent)))))))
 
 (defun e::restore-overlay (buffer overlay-start overlay-end properties)
   "Helper function to restore an instruction overlay in BUFFER.
@@ -2404,8 +2400,9 @@ for %s:\n\n%s"
                       "Note that your response will be injected in the position the directive is \
 embedded in, so be mindful not to return anything superfluous that surrounds the embedded \
 directive."
-                      "Note that your response will replace the region spanned by the embedded \
-directive, so be mindful not to return anything superflous that surrounds it."))
+                      "Note that your response will replace the region spanned by the directive, \
+therefore you must be mindful to also return relevant parts of existing text that is contained \
+inside the directive region, which will then be re-injected into the source buffer.."))
                   (capitalize-first-letter (s)
                     (if (> (length s) 0)
                         (concat (upcase (substring s 0 1)) (downcase (substring s 1)))
@@ -2420,14 +2417,16 @@ directive, so be mindful not to return anything superflous that surrounds it."))
                           (format "buffer `%s`" (buffer-name buffer)))
                       (format "buffer `%s`" (buffer-name buffer))))
                   (expanded-directive-text (directive)
-                    (let ((directive-hints
+                    (let ((secondary-directives
                            (cl:remove-if-not (lambda (inst)
                                                (and (eq (e::instruction-type inst) 'directive)
                                                     (not (eq inst directive))))
                                              (e::wholly-contained-instructions
                                               (overlay-buffer directive)
                                               (overlay-start directive)
-                                              (overlay-end directive)))))
+                                              (overlay-end directive))))
+                          (sd-typename (if (null (overlay-get directive 'e:directive-status))
+                                           "hint" "correction")))
                       (concat
                        (format "%s" directive-region-info-string)
                        (if (string-empty-p directive-region-string)
@@ -2446,35 +2445,38 @@ directive, so be mindful not to return anything superflous that surrounds it."))
                        (if (not toplevel-directive-is-empty)
                            (format "The directive is:\n\n%s"
                                    (e::markdown-enquote (overlay-get directive 'e:directive)))
-                         "The directive is composed entirely of hints, so you should treat them as \
-subdirectives.")
-                       (cl:loop for hint in directive-hints
-                                when (not (string-empty-p (e::directive-text hint)))
+                         (format "The directive is composed entirely of %ss, so you should treat them as \
+subdirectives."
+                                 sd-typename))
+                       (cl:loop for sd in secondary-directives
+                                when (not (string-empty-p (e::directive-text sd)))
                                 concat (concat
                                         "\n\n"
-                                        (cl:destructuring-bind (hint-region-info hint-region)
-                                            (e::overlay-region-info hint)
+                                        (cl:destructuring-bind (sd-region-info sd-region)
+                                            (e::overlay-region-info sd)
                                           (concat
                                            (format "For %s"
-                                                   hint-region-info)
-                                           (let ((hint-text (e::markdown-enquote
-                                                             (overlay-get hint 'e:directive))))
-                                             (if (e::bodyless-instruction-p hint)
-                                                 (format ", you have a hint:\n\n%s"
-                                                         hint-text)
+                                                   sd-region-info)
+                                           (let ((sd-text (e::markdown-enquote
+                                                             (overlay-get sd 'e:directive))))
+                                             (if (e::bodyless-instruction-p sd)
+                                                 (format ", you have a %s:\n\n%s"
+                                                         sd-typename
+                                                         sd-text)
                                                (let ((markdown-delimiter
                                                       (e::delimiting-markdown-backticks
-                                                       hint-region)))
+                                                       sd-region)))
                                                  (concat
                                                   (format ", which correspond%s to:\n\n%s"
-                                                          (if (e::multiline-string-p hint-region)
+                                                          (if (e::multiline-string-p sd-region)
                                                               "" "s")
                                                           (format "%s\n%s\n%s"
                                                                   markdown-delimiter
-                                                                  hint-region
+                                                                  sd-region
                                                                   markdown-delimiter))
-                                                  (format "\n\nYou have the hint:\n\n%s"
-                                                          hint-text)))))))))))))
+                                                  (format "\n\nYou have the %s:\n\n%s"
+                                                          sd-typename
+                                                          sd-text)))))))))))))
         (with-temp-buffer
           (insert
            (concat
@@ -2630,10 +2632,6 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
                           (apply-all-diffs)
                           (ediff-quit t)))))))))
         (set-window-configuration orig-window-config)))))
-
-(defvar e::id-counter 0)
-(defvar e::id-usage-map (make-hash-table))
-(defvar e::retired-ids ())
 
 (defun e::create-id ()
   (let ((id
