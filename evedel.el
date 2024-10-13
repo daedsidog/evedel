@@ -1621,11 +1621,17 @@ Also updates the child instructions of the INSTRUCTION, if UPDATE-CHILDREN is
 non-nil."
   (cl:labels
       ((directive-color (directive)
-         (pcase (overlay-get directive 'e:directive-status)
-           ('processing e:directive-processing-color)
-           ('succeeded  e:directive-success-color)
-           ('failed     e:directive-fail-color)
-           (_           e:directive-color)))
+         (cl:labels ((dircol ()
+                       (pcase (overlay-get directive 'e:directive-status)
+                         ('processing e:directive-processing-color)
+                         ('succeeded  e:directive-success-color)
+                         ('failed     e:directive-fail-color)
+                         (_           e:directive-color))))
+           (if-let ((parent-directive (e::parent-instruction directive 'directive)))
+               (if (eq (overlay-get parent-directive 'e:directive-status) 'processing)
+                   e:directive-processing-color
+                 (dircol))
+             (dircol))))
        (aux (instruction &optional update-children priority (parent nil))
          (let* ((instruction-type (e::instruction-type instruction))
                 (padding (with-current-buffer (overlay-buffer instruction)
