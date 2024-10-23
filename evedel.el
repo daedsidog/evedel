@@ -2397,8 +2397,9 @@ for %s:\n\n%s"
                       "Note that your response will be injected in the position the directive is \
 embedded in, so be mindful not to return anything superfluous that surrounds the embedded \
 directive."
-                      "Note that your response will replace the region spanned by the embedded \
-directive, so be mindful not to return anything superflous that surrounds it."))
+                      "Note that your response will replace the region spanned by the directive, \
+therefore you must be mindful to also return relevant parts of existing text that is contained \
+inside the directive region, which will then be re-injected into the source buffer.."))
                   (capitalize-first-letter (s)
                     (if (> (length s) 0)
                         (concat (upcase (substring s 0 1)) (downcase (substring s 1)))
