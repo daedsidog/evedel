@@ -1101,7 +1101,7 @@ Signals an error when the query is malformed."
 If ELEMENT is found in LIST, returns a list with ELEMENT as the head and the
 rest of the list rotated around it.  Otherwise, returns the LIST."
   (if-let ((element-tail (member element list)))
-      (append element-tail 
+      (append element-tail
               (cl-loop for elt in list
                        while (not (eq elt element))
                        collect elt))
@@ -2116,7 +2116,8 @@ toplevel instructions that also match the specified type."
                                  (cl-loop for child in children do (puthash child t inferiors))))
                           finally (cl-return (if of-type
                                                  (cl-remove-if-not (lambda (instr)
-                                                                     (eq (e--instruction-type instr) of-type))
+                                                                     (eq (e--instruction-type instr)
+                                                                         of-type))
                                                                    (hash-table-keys toplevels))
                                                (hash-table-keys toplevels)))))
 
@@ -2312,10 +2313,10 @@ Returns the prompt as a string."
          (pred (lambda (instr)
                  (e--reference-matches-query-p instr query)))
          (toplevel-references (e--foreach-instruction instr
-                                                      when (and (e--referencep instr)
-                                                                (eq (e--topmost-instruction instr 'reference pred)
-                                                                    instr))
-                                                      collect instr))
+                                when (and (e--referencep instr)
+                                          (eq (e--topmost-instruction instr 'reference pred)
+                                              instr))
+                                collect instr))
          (linked-refs (let ((visited-refs (make-hash-table))
                             (independent-refs ())
                             (child-refmap
@@ -2391,8 +2392,8 @@ Returns the prompt as a string."
                              do (puthash ref t hashset)
                              and concat (cl-destructuring-bind (ref-info-string _)
                                             (e--overlay-region-info ref)
-                                          (format "\n\nCommentary from reference #%d in buffer `%s` \
-for %s:\n\n%s"
+                                          (format "\n\nCommentary from reference #%d in buffer \
+`%s` for %s:\n\n%s"
                                                   (e--instruction-id ref)
                                                   (overlay-buffer ref)
                                                   ref-info-string
@@ -2400,13 +2401,24 @@ for %s:\n\n%s"
                              into commentary
                              finally (cl-return commentary)))
                   (response-directive-guide-text ()
-                    (if (e--bodyless-instruction-p directive)
-                        "Note that your response will be injected in the position the directive is \
-embedded in, so be mindful not to return anything superfluous that surrounds the embedded \
-directive."
-                      "Note that your response will replace the region spanned by the directive, \
-therefore you must be mindful to also return relevant parts of existing text that is contained \
-inside the directive region, which will then be re-injected into the source buffer.."))
+                    (concat
+                     "What you return must be enclosed within a Markdown block. I will then parse \
+the content of your Markdown block, and then format and inject the result where it needs to go by \
+myself."
+                     "\n\n"
+                     "If you cannot complete the directive or something is unclear to you, be it \
+due to missing information or due to the directive asking something outside your abilities, do not \
+guess or proceed. Instead, reply with a question or clarification that does not contain Markdown \
+code blocks. I will treat a response without Markdown code blocks as invalidated, and will format \
+its contents a failure reason. Be strict, and announce failure even at the slightest discrepancy."
+                     "\n\n"
+                     (if (e--bodyless-instruction-p directive)
+                         "Note that I will inject your response in the position the directive is \
+embedded in, so be mindful not to return anything superfluous that surrounds the above region."
+                       (concat
+                        "Note that I deleted the original text region"
+                        (format " (%s), " directive-region-info-string)
+                        "so I expect you to return a replacement."))))
                   (capitalize-first-letter (s)
                     (if (> (length s) 0)
                         (concat (upcase (substring s 0 1)) (downcase (substring s 1)))
@@ -2447,10 +2459,10 @@ inside the directive region, which will then be re-injected into the source buff
                                     markdown-delimiter))))
                        "\n\n"
                        (if (not toplevel-directive-is-empty)
-                           (format "The directive is:\n\n%s"
+                           (format "My directive to you is:\n\n%s"
                                    (e--markdown-enquote (overlay-get directive 'e-directive)))
-                         (format "The directive is composed entirely of %ss, so you should treat them as \
-subdirectives."
+                         (format "My directive to you is composed entirely out of %ss, so you \
+should treat them as subdirectives, instead."
                                  sd-typename))
                        (cl-loop for sd in secondary-directives
                                 when (not (string-empty-p (e--directive-text sd)))
@@ -2493,21 +2505,7 @@ subdirectives."
             (when directive-toplevel-reference
               (format " Note that the directive is embedded within %s reference."
                       (if (> reference-count 1) "the" "a")))
-            " Follow the directive and return what it asks of you.
-
-What you return must be enclosed within a Markdown block. The content of your Markdown block will \
-be parsed, and the result will then be formatted and injected into the region the directive spans \
-in the buffer, replacing it."
-            (when (string-empty-p directive-region-string)
-              " In this case, since the directive doesn't span a region, your response will be \
-injected directly instead of it, without replacing anything.")
-            "\n\n"
-            "If you cannot complete your directive or something is unclear to you, be it due to \
-missing information or due to the directive asking something outside your abilities, do not guess \
-or proceed. Instead, reply with a question or clarification that does not contain Markdown code \
-blocks. A response without Markdown code blocks is invalidated, and its contents will be displayed \
-to the user as a failure reason. Be very strict, and announce failure even at the slightest \
-discrepancy."
+            " Use the references to complete my directive."
             (unless (zerop reference-count)
               (concat
                (format "\n\n## Reference%s%s"
@@ -2543,12 +2541,10 @@ discrepancy."
                                    markdown-delimiter
                                    ref-string
                                    markdown-delimiter)
-                           (when directive-toplevel-reference
+                           (when (eq ref directive-toplevel-reference)
                              (concat
                               (format "\n\nThe directive is embedded in %s"
-                                      (expanded-directive-text directive))
-                              "\n\n"
-                              (response-directive-guide-text)))
+                                      (expanded-directive-text directive))))
                            (let ((commentary (e--commentary-text ref)))
                              (unless (string-empty-p commentary)
                                (puthash ref t used-commentary-refs)
@@ -2564,10 +2560,24 @@ the directive, but are nonetheless either containing the directive or belong to 
 references, and thus could prove important:"))
               (insert (aggregated-commentary (append directive-commentators
                                                      reference-commentators)))))
-          (unless directive-toplevel-reference
+          (if (not directive-toplevel-reference)
             (insert
              (concat "\n\n"
                      "## Directive"
+                     "\n\n"
+                     (format "For %s, %s"
+                             (instruction-path-namestring directive-buffer)
+                             (expanded-directive-text directive))
+                     "\n\n"
+                     (response-directive-guide-text)))
+            (insert
+             (concat "\n\n"
+                     "## Directive"
+                     "\n\n"
+                     "Recall that the directive is embedded within "
+                     (format "reference #%d in %s."
+                             (e--instruction-id directive-toplevel-reference)
+                             directive-region-info-string)
                      "\n\n"
                      (format "For %s, %s"
                              (instruction-path-namestring directive-buffer)
