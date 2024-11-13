@@ -1101,7 +1101,7 @@ Signals an error when the query is malformed."
 If ELEMENT is found in LIST, returns a list with ELEMENT as the head and the
 rest of the list rotated around it.  Otherwise, returns the LIST."
   (if-let ((element-tail (member element list)))
-      (append element-tail 
+      (append element-tail
               (cl-loop for elt in list
                        while (not (eq elt element))
                        collect elt))
@@ -2391,8 +2391,8 @@ Returns the prompt as a string."
                              do (puthash ref t hashset)
                              and concat (cl-destructuring-bind (ref-info-string _)
                                             (e--overlay-region-info ref)
-                                          (format "\n\nCommentary from reference #%d in buffer `%s` \
-for %s:\n\n%s"
+                                          (format "\n\nCommentary from reference #%d in buffer \
+`%s` for %s:\n\n%s"
                                                   (e--instruction-id ref)
                                                   (overlay-buffer ref)
                                                   ref-info-string
@@ -2404,9 +2404,12 @@ for %s:\n\n%s"
                         "Note that your response will be injected in the position the directive is \
 embedded in, so be mindful not to return anything superfluous that surrounds the embedded \
 directive."
-                      "Note that your response will replace the region spanned by the directive, \
-therefore you must be mindful to also return relevant parts of existing text that is contained \
-inside the directive region, which will then be re-injected into the source buffer.."))
+                      (concat
+                       "Note that your response will replace the region spanned by the directive"
+                       (format " (%s), " directive-region-info-string)
+                       "so make sure that you also return relevant parts of existing text that is \
+contained inside the directive region, which will then be re-injected into the source buffer at "
+                       (format "%s." directive-region-info-string))))
                   (capitalize-first-letter (s)
                     (if (> (length s) 0)
                         (concat (upcase (substring s 0 1)) (downcase (substring s 1)))
