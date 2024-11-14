@@ -2116,7 +2116,8 @@ toplevel instructions that also match the specified type."
                                  (cl-loop for child in children do (puthash child t inferiors))))
                           finally (cl-return (if of-type
                                                  (cl-remove-if-not (lambda (instr)
-                                                                     (eq (e--instruction-type instr) of-type))
+                                                                     (eq (e--instruction-type instr)
+                                                                         of-type))
                                                                    (hash-table-keys toplevels))
                                                (hash-table-keys toplevels)))))
 
@@ -2312,10 +2313,10 @@ Returns the prompt as a string."
          (pred (lambda (instr)
                  (e--reference-matches-query-p instr query)))
          (toplevel-references (e--foreach-instruction instr
-                                                      when (and (e--referencep instr)
-                                                                (eq (e--topmost-instruction instr 'reference pred)
-                                                                    instr))
-                                                      collect instr))
+                                when (and (e--referencep instr)
+                                          (eq (e--topmost-instruction instr 'reference pred)
+                                              instr))
+                                collect instr))
          (linked-refs (let ((visited-refs (make-hash-table))
                             (independent-refs ())
                             (child-refmap
@@ -2452,8 +2453,8 @@ contained inside the directive region, which will then be re-injected into the s
                        (if (not toplevel-directive-is-empty)
                            (format "The directive is:\n\n%s"
                                    (e--markdown-enquote (overlay-get directive 'e-directive)))
-                         (format "The directive is composed entirely of %ss, so you should treat them as \
-subdirectives."
+                         (format "The directive is composed entirely of %ss, so you should treat \
+them as subdirectives."
                                  sd-typename))
                        (cl-loop for sd in secondary-directives
                                 when (not (string-empty-p (e--directive-text sd)))
@@ -2546,12 +2547,10 @@ discrepancy."
                                    markdown-delimiter
                                    ref-string
                                    markdown-delimiter)
-                           (when directive-toplevel-reference
+                           (when (eq ref directive-toplevel-reference)
                              (concat
                               (format "\n\nThe directive is embedded in %s"
-                                      (expanded-directive-text directive))
-                              "\n\n"
-                              (response-directive-guide-text)))
+                                      (expanded-directive-text directive))))
                            (let ((commentary (e--commentary-text ref)))
                              (unless (string-empty-p commentary)
                                (puthash ref t used-commentary-refs)
@@ -2567,10 +2566,24 @@ the directive, but are nonetheless either containing the directive or belong to 
 references, and thus could prove important:"))
               (insert (aggregated-commentary (append directive-commentators
                                                      reference-commentators)))))
-          (unless directive-toplevel-reference
+          (if (not directive-toplevel-reference)
             (insert
              (concat "\n\n"
                      "## Directive"
+                     "\n\n"
+                     (format "For %s, %s"
+                             (instruction-path-namestring directive-buffer)
+                             (expanded-directive-text directive))
+                     "\n\n"
+                     (response-directive-guide-text)))
+            (insert
+             (concat "\n\n"
+                     "## Directive"
+                     "\n\n"
+                     "Recall that the directive is embedded within "
+                     (format "reference #%d in %s."
+                             (e--instruction-id directive-toplevel-reference)
+                             directive-region-info-string)
                      "\n\n"
                      (format "For %s, %s"
                              (instruction-path-namestring directive-buffer)
