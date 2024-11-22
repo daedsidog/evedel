@@ -2401,16 +2401,24 @@ Returns the prompt as a string."
                              into commentary
                              finally (cl-return commentary)))
                   (response-directive-guide-text ()
-                    (if (e--bodyless-instruction-p directive)
-                        "Note that your response will be injected in the position the directive is \
-embedded in, so be mindful not to return anything superfluous that surrounds the embedded \
-directive."
-                      (concat
-                       "Note that your response will replace the region spanned by the directive"
-                       (format " (%s), " directive-region-info-string)
-                       "so make sure that you also return relevant parts of existing text that is \
-contained inside the directive region, which will then be re-injected into the source buffer at "
-                       (format "%s." directive-region-info-string))))
+                    (concat
+                     "What you return must be enclosed within a Markdown block. I will then parse \
+the content of your Markdown block, and then format and inject the result where it needs to go by \
+myself."
+                     "\n\n"
+                     "If you cannot complete the directive or something is unclear to you, be it \
+due to missing information or due to the directive asking something outside your abilities, do not \
+guess or proceed. Instead, reply with a question or clarification that does not contain Markdown \
+code blocks. I will treat a response without Markdown code blocks as invalidated, and will format \
+its contents a failure reason. Be strict, and announce failure even at the slightest discrepancy."
+                     "\n\n"
+                     (if (e--bodyless-instruction-p directive)
+                         "Note that I will inject your response in the position the directive is \
+embedded in, so be mindful not to return anything superfluous that surrounds the above region."
+                       (concat
+                        "Note that I deleted the original text region"
+                        (format " (%s), " directive-region-info-string)
+                        "so I expect you to return a replacement."))))
                   (capitalize-first-letter (s)
                     (if (> (length s) 0)
                         (concat (upcase (substring s 0 1)) (downcase (substring s 1)))
@@ -2451,10 +2459,10 @@ contained inside the directive region, which will then be re-injected into the s
                                     markdown-delimiter))))
                        "\n\n"
                        (if (not toplevel-directive-is-empty)
-                           (format "The directive is:\n\n%s"
+                           (format "My directive to you is:\n\n%s"
                                    (e--markdown-enquote (overlay-get directive 'e-directive)))
-                         (format "The directive is composed entirely of %ss, so you should treat \
-them as subdirectives."
+                         (format "My directive to you is composed entirely out of %ss, so you \
+should treat them as subdirectives, instead."
                                  sd-typename))
                        (cl-loop for sd in secondary-directives
                                 when (not (string-empty-p (e--directive-text sd)))
@@ -2497,21 +2505,7 @@ them as subdirectives."
             (when directive-toplevel-reference
               (format " Note that the directive is embedded within %s reference."
                       (if (> reference-count 1) "the" "a")))
-            " Follow the directive and return what it asks of you.
-
-What you return must be enclosed within a Markdown block. The content of your Markdown block will \
-be parsed, and the result will then be formatted and injected into the region the directive spans \
-in the buffer, replacing it."
-            (when (string-empty-p directive-region-string)
-              " In this case, since the directive doesn't span a region, your response will be \
-injected directly instead of it, without replacing anything.")
-            "\n\n"
-            "If you cannot complete your directive or something is unclear to you, be it due to \
-missing information or due to the directive asking something outside your abilities, do not guess \
-or proceed. Instead, reply with a question or clarification that does not contain Markdown code \
-blocks. A response without Markdown code blocks is invalidated, and its contents will be displayed \
-to the user as a failure reason. Be very strict, and announce failure even at the slightest \
-discrepancy."
+            " Use the references to complete my directive."
             (unless (zerop reference-count)
               (concat
                (format "\n\n## Reference%s%s"
