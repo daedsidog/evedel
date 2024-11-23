@@ -687,7 +687,10 @@ This command is useful to see what is actually being sent to the model."
                                            'directive)))
     (let ((request-string (e--directive-llm-prompt directive)))
       (let ((bufname "*evedel-directive-preview*"))
-        (with-output-to-temp-buffer bufname
+        (with-temp-buffer-window bufname
+            '((display-buffer-reuse-window
+               display-buffer-same-window))
+            nil
           (princ (format "<!-- SYSTEM: %s -->"
                          (replace-regexp-in-string "\n"
                                                    "\n# "
