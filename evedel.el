@@ -468,6 +468,10 @@ overlap to the point where no other reasonable option is available."
                                                          t)))
     (when (eq (overlay-get directive 'e-directive-status) 'processing)
       (overlay-put directive 'e-directive-status nil))
+    (let ((topmost-directive (e--topmost-instruction directive 'directive)))
+      (when (eq (overlay-get topmost-directive 'e-directive-status) 'failed)
+        (setf (overlay-get topmost-directive 'e-directive-status) nil)
+        (e--update-instruction-overlay topmost-directive t)))
     (e--read-directive directive)))
 
 (defun e-modify-reference-commentary ()
@@ -1637,10 +1641,13 @@ non-nil."
                          ('succeeded  e-directive-success-color)
                          ('failed     e-directive-fail-color)
                          (_           e-directive-color))))
-           (if-let ((parent-directive (e--parent-instruction directive 'directive)))
-               (if (eq (overlay-get parent-directive 'e-directive-status) 'processing)
-                   e-directive-processing-color
-                 (dircol))
+           (if-let ((parent-directive (e--topmost-instruction directive 'directive)))
+               (let ((parent-status (overlay-get parent-directive 'e-directive-status)))
+                 (if (eq parent-status 'processing)
+                     e-directive-processing-color
+                   (if (eq parent-status 'failed)
+                       e-directive-fail-color
+                     (dircol))))
              (dircol))))
        (aux (instruction &optional update-children priority (parent nil))
          (let* ((instruction-type (e--instruction-type instruction))
@@ -1755,9 +1762,18 @@ non-nil."
                       (directive-typename "DIRECTIVE"))
                   (if (and parent
                            (e--directivep parent))
-                      (if (overlay-get parent 'e-directive-status)
-                          (setq directive-typename "CORRECTION")
-                        (setq directive-typename "DIRECTIVE HINT")))
+                      (progn
+                        (pcase (overlay-get parent 'e-directive-status)
+                          ((or 'processing 'failed)
+                           (if-let ((existing-typename (overlay-get instruction
+                                                                    'e-subdirective-typename)))
+                               (setq directive-typename existing-typename)
+                             (setq directive-typename "HINT")))
+                          ('succeeded (setq directive-typename "CORRECTION"))
+                          (_ (setq directive-typename "HINT")))
+                        (setf (overlay-get instruction 'e-subdirective-typename)
+                              directive-typename))
+                    (setf (overlay-get instruction 'e-subdirective-typename) nil))
                   (setq sublabel (concat
                                   sublabel
                                   (format "%s %s"
@@ -2444,8 +2460,10 @@ embedded in, so be mindful not to return anything superfluous that surrounds the
                                               (overlay-buffer directive)
                                               (overlay-start directive)
                                               (overlay-end directive))))
-                          (sd-typename (if (null (overlay-get directive 'e-directive-status))
-                                           "hint" "correction")))
+                          (sd-typename (if (not (eq (overlay-get directive 'e-directive-status)
+                                               'succeeded))
+                                           "hint"
+                                         "correction")))
                       (concat
                        (format "%s" directive-region-info-string)
                        (if (string-empty-p directive-region-string)
