@@ -1306,8 +1306,12 @@ the current buffer."
     (cl-flet ((mark-failed (reason)
                 (overlay-put directive 'e-directive-status 'failed)
                 (overlay-put directive 'e-directive-fail-reason reason)))
-      (if (null response)
-          (mark-failed (plist-get info :status))
+      (cond
+       ((null response)
+        (mark-failed (plist-get info :status)))
+       ((eq response 'abort)
+        (mark-failed "The request has been aborted."))
+       (t
         ;; Parse response that's delimited by Markdown code blocks.
         (if (not (string-match "```+.*\n\\(\\(?:.+\\|\n\\)+\\)\n```+" response))
             (mark-failed response)
@@ -1334,7 +1338,7 @@ the current buffer."
                     (backward-delete-char 1)
                     (unless (eq indent-line-function #'indent-relative)
                       (indent-region beg end)))
-                  (overlay-put directive 'evaporate t))))))))
+                  (overlay-put directive 'evaporate t)))))))))
     (e--update-instruction-overlay directive t)))
 
 (defun e--referencep (instruction)
