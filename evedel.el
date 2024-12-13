@@ -487,52 +487,51 @@ overlap to the point where no other reasonable option is available."
 If a region is selected, send all directives within the region.
 If a region is not selected and there is a directive under the point, send it."
   (interactive)
-  (cl-labels ((execute (directive)
-                (when (e--being-processed-p directive)
-                  (cl-return-from execute))
-                (if (e--directive-empty-p directive)
-                    ;; There is no point in sending an empty directive to gptel.
-                    (e--process-directive-llm-response "The directive is empty!"
-                                                       (list :context directive))
-                  (gptel-request (e--directive-llm-prompt directive)
-                    :system (e--directive-llm-system-message directive)
-                    :dry-run nil
-                    :stream nil
-                    :in-place nil
-                    :callback #'e--process-directive-llm-response
-                    :context directive)
-                  (overlay-put directive 'e-directive-status 'processing)
-                  (e--update-instruction-overlay directive t))))
-    (if (region-active-p)
-        (when-let ((toplevel-directives
-                    (cl-remove-duplicates
-                     (mapcar (lambda (inst)
-                               (e--topmost-instruction inst 'directive))
-                             (e--instructions-in (region-beginning)
-                                                 (region-end)
-                                                 'directive)))))
-          (dolist (directive toplevel-directives)
-            (execute directive))
-          (let ((directive-count (length toplevel-directives)))
-            (message "Sent %d directive%s to gptel for processing"
-                     directive-count
-                     (if (> directive-count 1) "s" ""))))
-      (if-let ((directive (e--topmost-instruction (e--highest-priority-instruction
-                                                   (e--instructions-at (point) 'directive)
-                                                   t)
-                                                  'directive)))
-          (progn
+  (let ((count 0))
+    (cl-labels ((execute (directive)
+                  (unless (e--being-processed-p directive)
+                    (if (e--directive-empty-p directive)
+                        ;; There is no point in sending an empty directive to gptel.
+                        (e--process-directive-llm-response "The directive is empty!"
+                                                           (list :context directive))
+                      (gptel-request (e--directive-llm-prompt directive)
+                        :system (e--directive-llm-system-message directive)
+                        :dry-run nil
+                        :stream nil
+                        :in-place nil
+                        :callback #'e--process-directive-llm-response
+                        :context directive)
+                      (overlay-put directive 'e-directive-status 'processing)
+                      (e--update-instruction-overlay directive t)
+                      (setq count (1+ count))))))
+      (if (region-active-p)
+          (when-let ((toplevel-directives
+                      (cl-remove-duplicates
+                       (mapcar (lambda (instr)
+                                 (e--topmost-instruction instr 'directive))
+                               (e--instructions-in (region-beginning)
+                                                   (region-end)
+                                                   'directive)))))
+            (dolist (directive toplevel-directives)
+              (execute directive)))
+        (if-let ((directive (e--topmost-instruction (e--highest-priority-instruction
+                                                     (e--instructions-at (point) 'directive)
+                                                     t)
+                                                    'directive)))
             (execute directive)
-            (message "Sent directive to gptel for processing"))
-        (when-let ((toplevel-directives (cl-remove-duplicates
-                                         (mapcar (lambda (inst)
-                                                   (e--topmost-instruction inst 'directive))
-                                                 (e--instructions-in (point-min)
-                                                                     (point-max)
-                                                                     'directive)))))
-          (dolist (dir toplevel-directives)
-            (execute dir))
-          (message "Sent all directives in current buffer to gptel for processing"))))))
+          (when-let ((toplevel-directives (cl-remove-duplicates
+                                           (mapcar (lambda (instr)
+                                                     (e--topmost-instruction instr 'directive))
+                                                   (e--instructions-in (point-min)
+                                                                       (point-max)
+                                                                       'directive)))))
+            (dolist (dir toplevel-directives)
+              (execute dir)))))
+      (if (> count 0)
+          (message "Sent %d directive%s to gptel for processing"
+                   count
+                   (if (> count 1) "s" ""))
+        (message "No directives sent to gptel")))))
 
 (defun e-delete-instructions ()
   "Delete instruction(s) either at point or within the selected region.
