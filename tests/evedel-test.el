@@ -63,6 +63,5 @@
   (e--malformed-infix-query (or (or(foo and bar)))))
 
 ;; Local Variables:
-;; read-symbol-shorthands: (("e--" . "evedel--")
-;;                          ("e-"  . "evedel-"))
+;; read-symbol-shorthands: (("e-"  . "evedel-"))
 ;; End:

@@ -2708,8 +2708,7 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
 (provide 'evedel)
 
 ;; Local Variables:
-;; read-symbol-shorthands: (("e--" . "evedel--")
-;;                          ("e-"  . "evedel-"))
+;; read-symbol-shorthands: (("e-"  . "evedel-"))
 ;; End:
 
 ;;; evedel.el ends here.
