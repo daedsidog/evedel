@@ -732,6 +732,17 @@ Examples:
       (e--read-directive-tag-query directive)
     (user-error "No directive at point")))
 
+(defun e-directive-undo (&optional arg)
+  "Undo the last change of the directive history at point.
+
+If ARG is nonzero, traverse the directive history backwards; otherwise, forwards."
+  (interactive "P")
+  (let ((directive (e--highest-priority-instruction
+                    (e--instructions-at (point) 'directive))))
+    (if directive
+        (e--directive-next-history directive (not (null arg)))
+      (user-error "No directive found at point"))))
+
 (defun e-add-tags (&optional reference)
   "Add tags to the reference under the point.
 
@@ -1319,6 +1330,11 @@ the current buffer."
             (with-current-buffer (overlay-buffer directive)
               (let ((beg (overlay-start directive))
                     (end (overlay-end directive)))
+                ;; Add current directive text to history.
+                (let ((current-text (buffer-substring-no-properties beg end)))
+                  (let ((trimmed-text (string-trim current-text)))
+                    (unless (string-empty-p trimmed-text)
+                      (push current-text (overlay-get directive 'e-directive-history)))))
                 ;; Delete any child directives of the top-level directive.
                 (let ((child-directives (cl-remove-if-not #'e--directivep
                                                           (e--child-instructions directive))))
@@ -1339,6 +1355,39 @@ the current buffer."
                       (indent-region beg end)))
                   (overlay-put directive 'evaporate t)))))))))
     (e--update-instruction-overlay directive t)))
+
+(defun e--replace-text (start end text)
+  "Replace the text in the region from START to END with TEXT."
+  (save-excursion
+    (goto-char start)
+    (insert text)
+    (delete-region (point) (+ (point) (- end start)))))
+
+(defun e--directive-next-history (directive &optional backwards)
+  "Cycle through the directive history.
+
+DIRECTIVE is an instruction directive overlay.
+If BACKWARDS is non-nil, traverse the history backward."
+  (when-let ((history (overlay-get directive 'e-directive-history)))
+    (let ((current-text (buffer-substring-no-properties
+                         (overlay-start directive)
+                         (overlay-end directive))))
+      (if backwards
+          ;; Traverse backwards: Get the last element of the history.
+          (let ((prev-text (car (last history))))
+            ;; Replace current directive text with the previous directive.
+            (e--replace-text (overlay-start directive) (overlay-end directive) prev-text)
+            ;; Append current text to the end of the history list.
+            (setf (overlay-get directive 'e-directive-history)
+                  (append (butlast history) (list current-text))))
+        ;; Traverse forward: Get the first element of the history.
+        (save-excursion
+          (let ((next-text (car history)))
+            ;; Replace current directive text with the next directive.
+            (e--replace-text (overlay-start directive) (overlay-end directive) next-text)))
+        ;; Move current text to the end of the history list.
+        (setf (overlay-get directive 'e-directive-history)
+              (append (cdr history) (list current-text)))))))
 
 (defun e--referencep (instruction)
   (eq (e--instruction-type instruction) 'reference))
