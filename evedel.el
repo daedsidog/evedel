@@ -3,7 +3,7 @@
 ;; Copyright (C) 2024 daedsidog
 
 ;; Author: daedsidog <contact@daedsidog.com>
-;; Version: 0.4.16
+;; Version: 0.4.19
 ;; Keywords: convenience, tools
 ;; Package-Requires: ((emacs "29.1") (gptel "0.9.0"))
 ;; URL: https://github.com/daedsidog/evedel
@@ -200,7 +200,7 @@ handles all the internal bookkeeping and cleanup."
 Interactively, or when MESSAGE is non-nil, show it in echo area.  With prefix
 argument, or when HERE is non-nil, insert it at point."
   (interactive (list (or current-prefix-arg 'interactive)))
-  (let ((version "v0.4.16"))
+  (let ((version "v0.4.19"))
     (cond
      ((or message (called-interactively-p 'any)) (message "Evedel %s" version))
      (here (insert (format "Evedel %s" version)))

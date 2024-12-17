@@ -84,6 +84,7 @@ The variable =evedel-patch-outdated-instructions= controls the automatic patchin
 | =evedel-modify-directive-tag-query=  | Enter a tag search query for a directive under the current point. |
 | =evedel-link-instructions=           | Link instructions by their ids.                                   |
 | =evedel-unlink-instructions=         | Unlink instructions by their ids.                                 |
+| =evedel-directive-undo=              | Undo the last change of the directive history at point.           |
 |--------------------------------------+-------------------------------------------------------------------|
 
 |-------------------------------------------+------------------------------------------------------|
@@ -229,7 +230,11 @@ Evedel doesn't require any additional setup and can be used straight after insta
          ("C-c e t" . evedel-add-tags)
          ("C-c e T" . evedel-remove-tags)
          ("C-c e D" . evedel-modify-directive-tag-query)
-         ("C-c e P" . evedel-preview-directive-prompt)))
+         ("C-c e P" . evedel-preview-directive-prompt)
+         ("C-c e /" . evedel-directive-undo)
+         ("C-c e ?" . (lambda ()
+                        (interactive)
+                        (evedel-directive-undo t)))
 #+end_src
 
 ** Planned Features
@@ -261,7 +266,7 @@ Mark indicates previously planned features that have been implemented.
 - [ ] Auto-saving/loading
 - *[X] Persistence with version controls, e.g. switching branches should not mess up the instructions [1].*
 - [ ] Preservation of sub-instructions returned as part of a successful directive
-- [ ] Instruction undoing/redoing history
+- *[X] Instruction undoing/redoing history*
 - *[X] Better/more precise instruction selection resolution for tightly nested instructions*
 
 [1] While the current patching is able to fix outdated instructions pretty accurately, it is still a better idea to maintain a separate save file for each branch. This feature solves the problem where even the most minor change in the file completely broke the overlay structure.
