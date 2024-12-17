@@ -84,6 +84,7 @@ The variable =evedel-patch-outdated-instructions= controls the automatic patchin
 | =evedel-modify-directive-tag-query=  | Enter a tag search query for a directive under the current point. |
 | =evedel-link-instructions=           | Link instructions by their ids.                                   |
 | =evedel-unlink-instructions=         | Unlink instructions by their ids.                                 |
+| =evedel-directive-undo=              | Undo the last change of the directive history at point.           |
 |--------------------------------------+-------------------------------------------------------------------|
 
 |-------------------------------------------+------------------------------------------------------|
