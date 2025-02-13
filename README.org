@@ -1,4 +1,6 @@
-* Evedel: Instructed LLM Programmer/Assistant
+#+title: Evedel: Instructed LLM Programmer/Assistant
+
+[[file:https://stable.melpa.org/packages/evedel-badge.svg]] [[file:https://melpa.org/packages/evedel-badge.svg]]
 
 #+begin_quote
 [!WARNING]
@@ -179,20 +181,39 @@ The =evedel-process-directives= command processes the directives.
 | =evedel-subinstruction-tint-intensity=    | Coefficient for adjusting subinstruction tints   |
 |-------------------------------------------+--------------------------------------------------|
 
-** Setup
+** Installation
 
-Before proceeding, make sure you have [[https://github.com/karthink/gptel][gptel]] configured (see [[#requirements][requirements]]). *This package will not work without it.*
-Clone the Evedel repository:
+Evedel can be installed in Emacs out of the box with =M-x package-install RET evedel=. This installs the latest commit.
+
+If you want the stable version instead, add MELPA-stable to your list of package sources:
+
+#+begin_src
+(add-to-list 'package-archives '("melpa-stable" . "https://stable.melpa.org/packages/") t)
+#+end_src
+
+Then, install Evedel with =M-x package-install RET evedel= from these sources.
+
+You can also optionally install =markdown-mode= to have its formatting in certain cases.
+
+*** Manual
+
+Download or clone the repository with
 
 #+begin_src sh
 git clone https://github.com/daedsidog/evedel.git
 #+end_src
 
-Add the path to the cloned repository in your Emacs configuration. You can do this by adding the following code to your =init.el= or =config.el= file:
+then run =M-x package-install-file RET= on the repository directory.
+
+** Setup
+
+Evedel doesn't require any additional setup and can be used straight after installation. Still, it is advised you customize keymaps for its commands. As a reference, I listed below my personal Evedel configuration:
 
 #+begin_src emacs-lisp
-(push "/path/to/evedel" load-path)
 (use-package evedel
+  :defer t
+  :config
+  (customize-set-variable 'evedel-empty-tag-query-matches-all nil)
   :bind (("C-c e r" . evedel-create-reference)
          ("C-c e d" . evedel-create-directive)
          ("C-c e s" . evedel-save-instructions)
@@ -210,8 +231,6 @@ Add the path to the cloned repository in your Emacs configuration. You can do th
          ("C-c e D" . evedel-modify-directive-tag-query)
          ("C-c e P" . evedel-preview-directive-prompt)))
 #+end_src
-
-Make sure to replace ="/path/to/evedel"= with the actual path where you cloned the Evedel repository.
 
 ** Planned Features
 
@@ -257,4 +276,4 @@ Mark indicates previously planned features that have been implemented.
 - Special thanks to [[https://github.com/karthink][Karthik Chikmagalur]] for the excellent [[https://github.com/karthink/gptel][gptel]] package
 
 #  LocalWords:  LLM Evedel DWIM Evedel's gptel evedel backend untagged autocomplete autocompletion
-#  LocalWords:  LLMs VC Strikethrough Ediff tooltips Alist ids
+#  LocalWords:  LLMs VC Strikethrough Ediff tooltips Alist ids MELPA Keymaps Keymap keymaps
