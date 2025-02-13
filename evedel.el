@@ -3,7 +3,7 @@
 ;; Copyright (C) 2024  daedsidog
 
 ;; Author: daedsidog <contact@daedsidog.com>
-;; Version: 0.1.0
+;; Version: 0.2.4
 ;; Keywords: convenience, tools
 ;; Package-Requires: ((emacs "29.1") (gptel "0.9.0"))
 ;; URL: https://github.com/daedsidog/evedel
