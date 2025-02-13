@@ -3,7 +3,7 @@
 ;; Copyright (C) 2024  daedsidog
 
 ;; Author: daedsidog <contact@daedsidog.com>
-;; Version: 0.2.4
+;; Version: 0.4.7
 ;; Keywords: convenience, tools
 ;; Package-Requires: ((emacs "29.1") (gptel "0.9.0"))
 ;; URL: https://github.com/daedsidog/evedel
@@ -25,7 +25,7 @@
 
 ;;; Commentary:
 
-;; Evedel is a GPTel extension aimed at managing and processing in-code instructions.  It provides
+;; Evedel is a gptel extension aimed at managing and processing in-code instructions.  It provides
 ;; functionality to define, manipulate, and process directives and references within a buffer.  Key
 ;; features include creating, deleting, and updating instructional overlays, as well as processing
 ;; responses from LLMs for directives.
