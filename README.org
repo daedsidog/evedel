@@ -80,6 +80,8 @@ The variable =evedel-patch-outdated-instructions= controls the automatic patchin
 | =evedel-add-tags=                    | Add tags to the reference under the point.                        |
 | =evedel-remove-tags=                 | Remove tags from the reference under the point.                   |
 | =evedel-modify-directive-tag-query=  | Enter a tag search query for a directive under the current point. |
+| =evedel-link-instructions=           | Link instructions by their ids.                                   |
+| =evedel-unlink-instructions=         | Unlink instructions by their ids.                                 |
 |--------------------------------------+-------------------------------------------------------------------|
 
 |-------------------------------------------+------------------------------------------------------|
@@ -115,6 +117,14 @@ You can add commentaries to references with the =evedel-modify-reference-comment
 
 [[file:media/commentary-example.png]]
 
+**** Linking
+
+References can be linked to one another, which sets up a dependency or of automatic inclusion relationship between the two. This means that when the first reference is utilized, it will automatically bring into play the reference it is linked to, as well. This chaining of references is recursive: if a linked reference is itself linked to another, and so forth, all these links will be followed automatically. This continues until either there are no more links to follow or a cycle is detected in the linkage graph.
+
+Linked references are also included when a directive is executed from within a reference which links to another, in a similar fashion to commentaries.
+
+Currently, linking is only relevant for references.
+
 *** Processing
 
 |-----------------------------------+------------------------------------------------|
@@ -139,7 +149,7 @@ The =evedel-process-directives= command processes the directives.
 - If at point: sends the directive under the point.
 - If a region is selected: sends all directives within the selected region.
 - Otherwise, processes all directives in the current buffer.
-  
+
 *** Navigation
 
 |--------------------------------------+-------------------------------------------------------------|
@@ -247,4 +257,4 @@ Mark indicates previously planned features that have been implemented.
 - Special thanks to [[https://github.com/karthink][Karthik Chikmagalur]] for the excellent [[https://github.com/karthink/gptel][gptel]] package
 
 #  LocalWords:  LLM Evedel DWIM Evedel's gptel evedel backend untagged autocomplete autocompletion
-#  LocalWords:  LLMs VC Strikethrough Ediff tooltips Alist
+#  LocalWords:  LLMs VC Strikethrough Ediff tooltips Alist ids
