@@ -1,4 +1,4 @@
-;;; evedel.el --- Instructed LLM programmer/assistant for Emacs -*- lexical-binding: t; -*-
+;;; evedel.el --- Instructed LLM programmer/assistant -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024 daedsidog
 
@@ -10,24 +10,27 @@
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
-;; This program is free software; you can redistribute it and/or modify it under the terms of the
-;; GNU General Public License as published by the Free Software Foundation, either version 3 of the
-;; License, or (at your option) any later version.
+;; This program is free software; you can redistribute it and/or modify it under
+;; the terms of the GNU General Public License as published by the Free Software
+;; Foundation, either version 3 of the License, or (at your option) any later
+;; version.
 ;;
-;; This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
-;; even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-;; General Public License for more details.
+;; This program is distributed in the hope that it will be useful, but WITHOUT
+;; ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+;; FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+;; details.
 ;;
-;; You should have received a copy of the GNU General Public License along with this program.  If
-;; not, see <https://www.gnu.org/licenses/>.
+;; You should have received a copy of the GNU General Public License along with
+;; this program.  If not, see <https://www.gnu.org/licenses/>.
 
 ;; This file is NOT part of GNU Emacs.
 
 ;;; Commentary:
 
-;; Evedel is a gptel extension aimed at managing and processing in-code instructions.  It provides
-;; functionality to define, manipulate, and process directives and references within a buffer.  Key
-;; features include creating, deleting, and updating instructional overlays, as well as processing
+;; Evedel is a gptel extension aimed at managing and processing in-code
+;; instructions.  It provides functionality to define, manipulate, and process
+;; directives and references within a buffer.  Key features include creating,
+;; deleting, and updating instructional overlays, as well as processing
 ;; responses from LLMs for directives.
 
 ;;; Code:
@@ -40,43 +43,43 @@
   "Customization group for Evedel."
   :group 'tools)
 
-(defcustom e:reference-color "yellow"
+(defcustom e-reference-color "yellow"
   "Color to be used as a tint for reference overlays."
   :type 'string)
 
-(defcustom e:directive-color "orange"
+(defcustom e-directive-color "orange"
   "Color to be used as a tint for directive overlays."
   :type 'string)
 
-(defcustom e:directive-processing-color "cyan"
+(defcustom e-directive-processing-color "cyan"
   "Color to be used as a tint for directives being processed by the model."
   :type 'string)
 
-(defcustom e:directive-success-color "green"
+(defcustom e-directive-success-color "green"
   "Color to be used as a tint for directives successfully processed by the model."
   :type 'string)
 
-(defcustom e:directive-fail-color "red"
+(defcustom e-directive-fail-color "red"
   "Color to be used as a tint for directives the model could not process."
   :type 'string)
 
-(defcustom e:highlighted-instruction-color "cyan"
+(defcustom e-highlighted-instruction-color "cyan"
   "Color for currently highlighted instructions."
   :type 'string)
 
-(defcustom e:instruction-bg-tint-intensity 0.075
+(defcustom e-instruction-bg-tint-intensity 0.075
   "Default intensity for background tinting of instructions."
   :type 'float)
 
-(defcustom e:instruction-label-tint-intensity 0.2
+(defcustom e-instruction-label-tint-intensity 0.2
   "Default intensity for label tinting of instructions."
   :type 'float)
 
-(defcustom e:highlighted-instruction-tint-intensity 0.2
+(defcustom e-highlighted-instruction-tint-intensity 0.2
   "Default intensity for tinting of highlighted instructions."
   :type 'float)
 
-(defcustom e:subinstruction-tint-coefficient 0.4
+(defcustom e-subinstruction-tint-coefficient 0.4
   "Coeffecient multiplied by by tint intensities.
 
 Only applicable to the subinstructions.  Makes it possible to have more a
@@ -85,7 +88,7 @@ more finely-tuned control over how tinting looks.
 Does not affect the label colors, just the backgrounds."
   :type 'float)
 
-(defcustom e:empty-tag-query-matches-all t
+(defcustom e-empty-tag-query-matches-all t
   "Determines behavior of directives without a tag search query.
 
 If set to t, directives without a specific tag search query will use all
@@ -93,7 +96,7 @@ available references.  Alternatively, if this is set to nil, directives without
 a search query will not use any references."
   :type 'boolean)
 
-(defcustom e:always-match-untagged-references t
+(defcustom e-always-match-untagged-references t
   "Controls inclusion of untagged references in directive prompts.
 
 When set to t, untagged references are always incorporated into directive
@@ -105,12 +108,12 @@ A reference is considered untagged when it has no direct tags.  References can
 inherit tags from ancestor references and still be considered untagged."
   :type 'boolean)
 
-(defcustom e:patch-outdated-instructions t
+(defcustom e-patch-outdated-instructions t
   "Automatically patch instructions when the save file is outdated if non-nil."
   :type 'boolean
   :group 'evedel)
 
-(defcustom e:descriptive-mode-roles
+(defcustom e-descriptive-mode-roles
   '((emacs-lisp-mode . "an Emacs Lisp programmer")
     (js-mode         . "a JavaScript programmer")
     (c-mode          . "a C programmer")
@@ -122,19 +125,19 @@ inherit tags from ancestor references and still be considered untagged."
 Answers the question \"who is the model?\""
   :type 'list)
 
-(defvar e::instructions ()
+(defvar e--instructions ()
   "Association list mapping buffers or files to lists of instruction overlays.")
-(defvar e::default-instruction-priority -99)
-(defvar e::highlighted-instruction nil)
-(defvar e::inhibit-file-restoration nil
+(defvar e--default-instruction-priority -99)
+(defvar e--highlighted-instruction nil)
+(defvar e--inhibit-file-restoration nil
   "If t, `evedel--restore-file-instructions' becomes inert.
 This is sometimes necessary to prevent various hooks from interfering with the
 instruction restoration process.")
-(defvar e::id-counter 0)
-(defvar e::id-usage-map (make-hash-table))
-(defvar e::retired-ids ())
+(defvar e--id-counter 0)
+(defvar e--id-usage-map (make-hash-table))
+(defvar e--retired-ids ())
 
-(defmacro e::foreach-instruction (binding &rest body)
+(defmacro e--foreach-instruction (binding &rest body)
   "Iterate over `evedel--instructions' with BINDING as the binding.
 
 Executes BODY inside an existing `cl-loop' form, which means that the macro is
@@ -154,57 +157,57 @@ This macro is the preferred way to iterate over instructions, as it
 handles all the internal bookkeeping and cleanup."
   (declare (indent 1))
   ;; "bof" stands for "buffer or file".
-  (cl:with-gensyms (cons bof specific-buffer)
+  (cl-with-gensyms (cons bof specific-buffer)
     (let ((instr (if (listp binding) (car binding) binding)))
-      `(cl:labels ((trashp (instr)
+      `(cl-labels ((trashp (instr)
                      (and (null (overlay-buffer instr))
-                          (not (overlay-get instr 'e:marked-for-deletion))))
+                          (not (overlay-get instr 'e-marked-for-deletion))))
                    (clean-alist-entry (cons)
-                     (mapc (lambda (instr) (e::delete-instruction instr (car cons)))
-                           (cl:remove-if-not #'trashp (cdr cons)))
-                     (let ((instrs (cl:remove-if #'trashp (cdr cons))))
+                     (mapc (lambda (instr) (e--delete-instruction instr (car cons)))
+                           (cl-remove-if-not #'trashp (cdr cons)))
+                     (let ((instrs (cl-remove-if #'trashp (cdr cons))))
                        (setf (cdr cons) instrs))))
          (let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
            (if (not ,specific-buffer)
-               (cl:loop for ,cons in e::instructions
+               (cl-loop for ,cons in e--instructions
                         do (let ((,bof (car ,cons)))
                              (if (stringp ,bof) ; bof is a file, restore it.
-                                 (e::restore-file-instructions ,bof)
+                                 (e--restore-file-instructions ,bof)
                                (clean-alist-entry ,cons)))) ; bof is a buffer, clean it.
-             (when-let ((cons (assoc ,specific-buffer e::instructions)))
+             (when-let ((cons (assoc ,specific-buffer e--instructions)))
                (clean-alist-entry cons)))
            ;; Remove empty cons cells from the alist.
-           (setq e::instructions (cl:remove-if (lambda (cons)
+           (setq e--instructions (cl-remove-if (lambda (cons)
                                                  (null (cdr cons)))
-                                               e::instructions))
+                                               e--instructions))
            ;; The instructions alist should now be cleaned of deleted instructions.
-           (cl:loop for ,instr
+           (cl-loop for ,instr
                     in (if ,specific-buffer
-                           (alist-get ,specific-buffer e::instructions)
+                           (alist-get ,specific-buffer e--instructions)
                          (flatten-tree
-                          (cl:remove nil
+                          (cl-remove nil
                                      (mapcar (lambda (plist-or-instrs)
                                                (if (plist-get plist-or-instrs :instructions)
                                                    nil ; Plist
                                                  plist-or-instrs))
-                                             (mapcar #'cdr e::instructions)))))
+                                             (mapcar #'cdr e--instructions)))))
                     ,@body))))))
 
 ;;;###autoload
-(defun e:version (&optional here message)
+(defun e-version (&optional here message)
   "Return the current version of Evedel.
 
 Interactively, or when MESSAGE is non-nil, show it in echo area.  With prefix
 argument, or when HERE is non-nil, insert it at point."
   (interactive (list (or current-prefix-arg 'interactive)))
-  (let ((version "v0.4.12"))
+  (let ((version "v0.4.10"))
     (cond
      ((or message (called-interactively-p 'any)) (message "Evedel %s" version))
      (here (insert (format "Evedel %s" version)))
      (t version))))
 
 ;;;###autoload
-(defun e:save-instructions (path)
+(defun e-save-instructions (path)
   "Save instructions overlays to a file PATH specified by the user.
 
 Instructions are only saved if they are associated with a buffer that has an
@@ -213,13 +216,13 @@ not saved."
   (interactive (list (read-file-name "Save instruction list to file: ")))
   (let ((file-alist ())
         (saved-instruction-count 0))
-    (cl:loop for cons in e::instructions
+    (cl-loop for cons in e--instructions
              if (bufferp (car cons))
              do (let ((buffer (car cons)))
                   (when-let ((buffer-file-name (buffer-file-name buffer)))
                     (let ((file (file-relative-name buffer-file-name
                                                     (file-name-directory path))))
-                      (when-let ((instrs (e::stashed-buffer-instructions buffer)))
+                      (when-let ((instrs (e--stashed-buffer-instructions buffer)))
                         (let ((original-content
                                (with-current-buffer buffer
                                  (buffer-substring-no-properties (point-min) (point-max)))))
@@ -227,18 +230,18 @@ not saved."
                                       (list :original-content original-content
                                             :instructions instrs))
                                 file-alist))
-                        (cl:incf saved-instruction-count (length instrs))))))
+                        (cl-incf saved-instruction-count (length instrs))))))
              else do
              (push cons file-alist)
-             (cl:incf saved-instruction-count (length (plist-get (cdr cons) :instructions))))
+             (cl-incf saved-instruction-count (length (plist-get (cdr cons) :instructions))))
     (if (not (zerop saved-instruction-count))
         (with-temp-file path
           (let ((save-file ()))
-            (setf save-file (plist-put save-file :version (e:version)))
+            (setf save-file (plist-put save-file :version (e-version)))
             (setf save-file
-                  (plist-put save-file :ids (list :id-counter e::id-counter
-                                                  :used-ids (hash-table-keys e::id-usage-map)
-                                                  :retired-ids e::retired-ids)))
+                  (plist-put save-file :ids (list :id-counter e--id-counter
+                                                  :used-ids (hash-table-keys e--id-usage-map)
+                                                  :retired-ids e--retired-ids)))
             (setf save-file (plist-put save-file :files file-alist))
             (prin1 save-file (current-buffer)))
           (let ((file-count (length file-alist)))
@@ -252,30 +255,30 @@ not saved."
         (message "No Evedel instructions to save")))))
 
 ;;;###autoload
-(defun e:load-instructions (path)
+(defun e-load-instructions (path)
   "Load instruction overlays from a file specified by PATH."
   (interactive (list (read-file-name "Instruction list file: ")))
-  (when (and (e::instructions)
+  (when (and (e--instructions)
              (called-interactively-p 'any))
     (unless (y-or-n-p "Discard existing Evedel instructions? ")
       (user-error "Aborted")))
-  (let* ((save-file (e::patch-save-file (with-temp-buffer
+  (let* ((save-file (e--patch-save-file (with-temp-buffer
                                           (insert-file-contents path)
                                           (read (current-buffer)))))
          (file-alist (plist-get save-file :files))
          (id-counter-plist (plist-get save-file :ids)))
     (unless (listp file-alist)
       (user-error "Malformed Evedel instruction list"))
-    (e:delete-all-instructions)
-    (cl:destructuring-bind (&key id-counter used-ids retired-ids) id-counter-plist
+    (e-delete-all-instructions)
+    (cl-destructuring-bind (&key id-counter used-ids retired-ids) id-counter-plist
       (let ((hm (make-hash-table)))
-        (cl:loop for used-id in used-ids
+        (cl-loop for used-id in used-ids
                  do (puthash used-id t hm))
-        (setq e::id-counter id-counter
-              e::id-usage-map hm
-              e::retired-ids retired-ids)))
-    (setq e::instructions file-alist)
-    (cl:loop for cons in e::instructions
+        (setq e--id-counter id-counter
+              e--id-usage-map hm
+              e--retired-ids retired-ids)))
+    (setq e--instructions file-alist)
+    (cl-loop for cons in e--instructions
              do (when (stringp (car cons))
                   (setf (car cons)
                         ;; We want to turn the relative paths of the save file to be absolute paths
@@ -283,16 +286,16 @@ not saved."
                         (expand-file-name (car cons) (file-name-parent-directory path)))))
     (let ((total-restored 0)
           (total-kia 0)
-          (total (cl:reduce #'+
-                         (mapcar #'length
-                                 (mapcar (lambda (plist)
-                                           (plist-get plist :instructions))
-                                         (mapcar #'cdr e::instructions))))))
-      (cl:loop for (file . _) in e::instructions
+          (total (cl-reduce #'+
+                            (mapcar #'length
+                                    (mapcar (lambda (plist)
+                                              (plist-get plist :instructions))
+                                            (mapcar #'cdr e--instructions))))))
+      (cl-loop for (file . _) in e--instructions
                do (progn
-                    (cl:multiple-value-bind (restored kia) (e::restore-file-instructions file t)
-                      (cl:incf total-restored restored)
-                      (cl:incf total-kia kia))))
+                    (cl-multiple-value-bind (restored kia) (e--restore-file-instructions file t)
+                      (cl-incf total-restored restored)
+                      (cl-incf total-kia kia))))
       (when (called-interactively-p 'any)
         (message "Restored %d out of %d instructions from %s%s"
                  total-restored
@@ -303,27 +306,27 @@ not saved."
                    ""))))))
 
 ;;;###autoload
-(defun e:instruction-count ()
+(defun e-instruction-count ()
   "Return the number of instructions currently loaded instructions.
 
 If called interactively, it messages the number of instructions and buffers."
   (interactive)
   (let ((count 0)
         (buffer-hash (make-hash-table :test 'eq)))
-    (e::foreach-instruction instr count instr into instr-count
+    (e--foreach-instruction instr count instr into instr-count
                             do (puthash (overlay-buffer instr) t buffer-hash)
                             finally (setf count instr-count))
     (let ((buffers (hash-table-count buffer-hash)))
       (when (called-interactively-p 'interactive)
-          (if (= count 0)
-              (message "No Evedel instructions currently loaded")
-            (message "Evedel is showing %d instruction%s from %d buffer%s"
-                     count (if (/= count 1) "s" "")
-                     buffers (if (/= buffers 1) "s" ""))))
+        (if (= count 0)
+            (message "No Evedel instructions currently loaded")
+          (message "Evedel is showing %d instruction%s from %d buffer%s"
+                   count (if (/= count 1) "s" "")
+                   buffers (if (/= buffers 1) "s" ""))))
       count)))
 
 ;;;###autoload
-(defun e:create-reference ()
+(defun e-create-reference ()
   "Create a reference instruction within the selected region.
 
 If a region is selected but partially covers an existing reference, then the
@@ -334,10 +337,10 @@ command will resize the reference in the following manner:
   - If the mark is located OUTSIDE the reference (i.e., the point is located
     INSIDE the reference) then the reference will be shrunk to the point."
   (interactive)
-  (e::create-instruction 'reference))
+  (e--create-instruction 'reference))
 
 ;;;###autoload
-(defun e:create-directive ()
+(defun e-create-directive ()
   "Create a directive instruction within the selected region.
 
 If a region is selected but partially covers an existing directive, then the
@@ -348,14 +351,14 @@ command will resize the directive in the following manner:
   - If the mark is located OUTSIDE the directive (i.e., the point is located
     INSIDE the directive) then the directive will be shrunk to the point."
   (interactive)
-  (e::create-instruction 'directive))
+  (e--create-instruction 'directive))
 
-(defun e:link-instructions (from-list to-list)
+(defun e-link-instructions (from-list to-list)
   "Link instructions with ids in FROM-LIST to those in TO-LIST.
 
 When invoked interactively, prompts user for two lists of instruction ids."
   (interactive
-   (let ((completion-table (mapcar #'number-to-string (hash-table-keys e::id-usage-map))))
+   (let ((completion-table (mapcar #'number-to-string (hash-table-keys e--id-usage-map))))
      (list (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to link: "
                                              completion-table nil t))
@@ -364,38 +367,38 @@ When invoked interactively, prompts user for two lists of instruction ids."
                                              completion-table nil t)))))
   (cl-labels
       ((update-links (instr-id num-key update-id)
-         (let* ((instr (e::instruction-with-id instr-id))
-                (links (overlay-get instr 'e:links))
+         (let* ((instr (e--instruction-with-id instr-id))
+                (links (overlay-get instr 'e-links))
                 (ids (plist-get links num-key)))
            (unless (member update-id ids)
              (setq ids (cons update-id ids))
-             (overlay-put instr 'e:links (plist-put links num-key ids))
+             (overlay-put instr 'e-links (plist-put links num-key ids))
              t))))
     (let ((new-link-count 0)
           (involved-instrs (make-hash-table)))
       (dolist (from-id from-list)
-        (when-let ((from-instr (e::instruction-with-id from-id)))
+        (when-let ((from-instr (e--instruction-with-id from-id)))
           (dolist (to-id to-list)
             (when (/= from-id to-id)
-              (when-let ((to-instr (e::instruction-with-id to-id)))
+              (when-let ((to-instr (e--instruction-with-id to-id)))
                 (when (and (update-links from-id :to to-id)
                            (update-links to-id :from from-id))
                   (puthash from-instr t involved-instrs)
                   (puthash to-instr t involved-instrs)
-                  (cl:incf new-link-count)))))))
-      (cl:loop for instr being the hash-keys of involved-instrs
-               do (e::update-instruction-overlay instr))
+                  (cl-incf new-link-count)))))))
+      (cl-loop for instr being the hash-keys of involved-instrs
+               do (e--update-instruction-overlay instr))
       (when (called-interactively-p 'interactive)
         (message "Created %d instruction link%s"
                  new-link-count
                  (if (= new-link-count 1) "" "s"))))))
 
-(defun e:unlink-instructions (from-list to-list)
+(defun e-unlink-instructions (from-list to-list)
   "Unlink instructions with ids in FROM-LIST from those in TO-LIST.
 
 When invoked interactively, prompts user for two lists of instruction ids."
   (interactive
-   (let ((completion-table (mapcar #'number-to-string (hash-table-keys e::id-usage-map))))
+   (let ((completion-table (mapcar #'number-to-string (hash-table-keys e--id-usage-map))))
      (list (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to unlink: "
                                              completion-table nil t))
@@ -404,104 +407,104 @@ When invoked interactively, prompts user for two lists of instruction ids."
                                              completion-table nil t)))))
   (cl-labels
       ((remove-links (instr-id num-key remove-id)
-         (let* ((instr (e::instruction-with-id instr-id))
-                (links (overlay-get instr 'e:links))
+         (let* ((instr (e--instruction-with-id instr-id))
+                (links (overlay-get instr 'e-links))
                 (ids (plist-get links num-key)))
            (when (member remove-id ids)
              (setq ids (remove remove-id ids))
-             (overlay-put instr 'e:links (plist-put links num-key ids))
+             (overlay-put instr 'e-links (plist-put links num-key ids))
              t))))
     (let ((removed-link-count 0)
           (involved-instrs (make-hash-table)))
       (dolist (from-id from-list)
-        (when-let ((from-instr (e::instruction-with-id from-id)))
+        (when-let ((from-instr (e--instruction-with-id from-id)))
           (dolist (to-id to-list)
-            (when-let ((to-instr (e::instruction-with-id to-id)))
+            (when-let ((to-instr (e--instruction-with-id to-id)))
               (when (and (remove-links from-id :to to-id)
                          (remove-links to-id :from from-id))
                 (puthash from-instr t involved-instrs)
                 (puthash to-instr t involved-instrs)
-                (cl:incf removed-link-count))))))
-      (cl:loop for instr being the hash-keys of involved-instrs
+                (cl-incf removed-link-count))))))
+      (cl-loop for instr being the hash-keys of involved-instrs
                do (when (buffer-live-p (overlay-buffer instr))
-                    (e::update-instruction-overlay instr)))
+                    (e--update-instruction-overlay instr)))
       (when (called-interactively-p 'interactive)
         (message "Removed %d instruction link%s"
                  removed-link-count
                  (if (= removed-link-count 1) "" "s"))))))
 
-(defun e:cycle-instructions-at-point (point)
+(defun e-cycle-instructions-at-point (point)
   "Cycle through instructions at POINT, highlighting them.
 
 This command allows for cycling through overlapping instructions at a
 point in the buffer and allows one to have better accuracy when instructions
 overlap to the point where no other reasonable option is available."
   (interactive "d")
-  (let ((instructions-at-point (e::instructions-at point))
-        (original-highlighted-instruction e::highlighted-instruction))
+  (let ((instructions-at-point (e--instructions-at point))
+        (original-highlighted-instruction e--highlighted-instruction))
     (cond
      ((null instructions-at-point)
-      (setq e::highlighted-instruction nil)
+      (setq e--highlighted-instruction nil)
       (when (called-interactively-p 'any)
         (message "No instructions at point")))
-     ((or (null e::highlighted-instruction)
-          (not (memq e::highlighted-instruction instructions-at-point)))
-      (setq e::highlighted-instruction nil)
-      (setq e::highlighted-instruction (e::highest-priority-instruction instructions-at-point)))
+     ((or (null e--highlighted-instruction)
+          (not (memq e--highlighted-instruction instructions-at-point)))
+      (setq e--highlighted-instruction nil)
+      (setq e--highlighted-instruction (e--highest-priority-instruction instructions-at-point)))
      (t
-      (if-let ((parent (e::parent-instruction e::highlighted-instruction)))
-          (setq e::highlighted-instruction parent)
-        (setq e::highlighted-instruction nil))))
-    (when e::highlighted-instruction
-      (e::update-instruction-overlay e::highlighted-instruction))
+      (if-let ((parent (e--parent-instruction e--highlighted-instruction)))
+          (setq e--highlighted-instruction parent)
+        (setq e--highlighted-instruction nil))))
+    (when e--highlighted-instruction
+      (e--update-instruction-overlay e--highlighted-instruction))
     (when original-highlighted-instruction
-      (e::update-instruction-overlay original-highlighted-instruction))
-    e::highlighted-instruction))
+      (e--update-instruction-overlay original-highlighted-instruction))
+    e--highlighted-instruction))
 
-(defun e:modify-directive ()
+(defun e-modify-directive ()
   "Modify the directive under the point."
   (interactive)
-  (when-let ((directive (e::highest-priority-instruction (e::instructions-at (point) 'directive)
+  (when-let ((directive (e--highest-priority-instruction (e--instructions-at (point) 'directive)
                                                          t)))
-    (when (eq (overlay-get directive 'e:directive-status) 'processing)
-      (overlay-put directive 'e:directive-status nil))
-    (e::read-directive directive)))
+    (when (eq (overlay-get directive 'e-directive-status) 'processing)
+      (overlay-put directive 'e-directive-status nil))
+    (e--read-directive directive)))
 
-(defun e:modify-reference-commentary ()
+(defun e-modify-reference-commentary ()
   "Modify the reference commentary under the point."
   (interactive)
-  (when-let ((reference (e::highest-priority-instruction (e::instructions-at (point) 'reference)
+  (when-let ((reference (e--highest-priority-instruction (e--instructions-at (point) 'reference)
                                                          t)))
-    (e::read-commentary reference)))
+    (e--read-commentary reference)))
 
-(defun e:process-directives ()
+(defun e-process-directives ()
   "Send directives to model via gptel.
 
 If a region is selected, send all directives within the region.
 If a region is not selected and there is a directive under the point, send it."
   (interactive)
-  (cl:labels ((execute (directive)
-                (when (e::being-processed-p directive)
-                  (cl:return-from execute))
-                (if (e::directive-empty-p directive)
+  (cl-labels ((execute (directive)
+                (when (e--being-processed-p directive)
+                  (cl-return-from execute))
+                (if (e--directive-empty-p directive)
                     ;; There is no point in sending an empty directive to gptel.
-                    (e::process-directive-llm-response "The directive is empty!"
+                    (e--process-directive-llm-response "The directive is empty!"
                                                        (list :context directive))
-                  (gptel-request (e::directive-llm-prompt directive)
-                    :system (e::directive-llm-system-message directive)
+                  (gptel-request (e--directive-llm-prompt directive)
+                    :system (e--directive-llm-system-message directive)
                     :dry-run nil
                     :stream nil
                     :in-place nil
-                    :callback #'e::process-directive-llm-response
+                    :callback #'e--process-directive-llm-response
                     :context directive)
-                  (overlay-put directive 'e:directive-status 'processing)
-                  (e::update-instruction-overlay directive t))))
+                  (overlay-put directive 'e-directive-status 'processing)
+                  (e--update-instruction-overlay directive t))))
     (if (region-active-p)
         (when-let ((toplevel-directives
-                    (cl:remove-duplicates
+                    (cl-remove-duplicates
                      (mapcar (lambda (inst)
-                               (e::topmost-instruction inst 'directive))
-                             (e::instructions-in (region-beginning)
+                               (e--topmost-instruction inst 'directive))
+                             (e--instructions-in (region-beginning)
                                                  (region-end)
                                                  'directive)))))
           (dolist (directive toplevel-directives)
@@ -510,24 +513,24 @@ If a region is not selected and there is a directive under the point, send it."
             (message "Sent %d directive%s to gptel for processing"
                      directive-count
                      (if (> directive-count 1) "s" ""))))
-      (if-let ((directive (e::topmost-instruction (e::highest-priority-instruction
-                                                   (e::instructions-at (point) 'directive)
+      (if-let ((directive (e--topmost-instruction (e--highest-priority-instruction
+                                                   (e--instructions-at (point) 'directive)
                                                    t)
                                                   'directive)))
           (progn
             (execute directive)
             (message "Sent directive to gptel for processing"))
-        (when-let ((toplevel-directives (cl:remove-duplicates
+        (when-let ((toplevel-directives (cl-remove-duplicates
                                          (mapcar (lambda (inst)
-                                                   (e::topmost-instruction inst 'directive))
-                                                 (e::instructions-in (point-min)
+                                                   (e--topmost-instruction inst 'directive))
+                                                 (e--instructions-in (point-min)
                                                                      (point-max)
                                                                      'directive)))))
           (dolist (dir toplevel-directives)
             (execute dir))
           (message "Sent all directives in current buffer to gptel for processing"))))))
 
-(defun e:delete-instructions ()
+(defun e-delete-instructions ()
   "Delete instruction(s) either at point or within the selected region.
 
 Display a message to the user showing how many instructions were deleted.
@@ -537,15 +540,15 @@ Throw a user error if no instructions to delete were found."
     (if (use-region-p)
         (let ((start (region-beginning))
               (end (region-end)))
-          (dolist (overlay (e::wholly-contained-instructions (current-buffer) start end))
-            (when (overlay-get overlay 'e:instruction)
-              (e::delete-instruction overlay)
+          (dolist (overlay (e--wholly-contained-instructions (current-buffer) start end))
+            (when (overlay-get overlay 'e-instruction)
+              (e--delete-instruction overlay)
               (setq deleted-count (1+ deleted-count))))
           (when (> deleted-count 0)
             (deactivate-mark))
           (unless (> deleted-count 0)
             (user-error "No instructions to delete within the selected region")))
-      (let ((overlay (e::delete-instruction-at (point))))
+      (let ((overlay (e--delete-instruction-at (point))))
         (when overlay
           (setq deleted-count 1))
         (unless overlay
@@ -553,10 +556,10 @@ Throw a user error if no instructions to delete were found."
     (when (> deleted-count 0)
       (message "Deleted %d instruction%s" deleted-count (if (> deleted-count 1) "s" "")))))
 
-(defun e:delete-all-instructions ()
+(defun e-delete-all-instructions ()
   "Delete all Evedel instructions across all buffers."
   (interactive)
-  (let ((instr-count (length (e::instructions))))
+  (let ((instr-count (length (e--instructions))))
     (when (and (called-interactively-p 'any)
                (zerop instr-count))
       (user-error "No instructions to delete"))
@@ -566,40 +569,39 @@ Throw a user error if no instructions to delete were found."
       (user-error "Aborted")))
   (let ((buffer-count 0)
         (deleted-instr-count 0))
-    (e::foreach-instruction instr
-      with buffer-hash = (make-hash-table)
-      unless (gethash (overlay-buffer instr) buffer-hash)
-      do (progn
-           (puthash (overlay-buffer instr) t buffer-hash)
-           (cl:incf buffer-count))
-      do (progn
-           (e::delete-instruction instr)
-           (cl:incf deleted-instr-count)))
+    (e--foreach-instruction instr
+                            with buffer-hash = (make-hash-table)
+                            unless (gethash (overlay-buffer instr) buffer-hash)
+                            do (progn
+                                 (puthash (overlay-buffer instr) t buffer-hash)
+                                 (cl-incf buffer-count))
+                            do (progn
+                                 (e--delete-instruction instr)
+                                 (cl-incf deleted-instr-count)))
     (when (not (zerop deleted-instr-count))
       (message "Deleted %d Evedel instruction%s in %d buffer%s"
                deleted-instr-count
                (if (= 1 deleted-instr-count) "" "s")
                buffer-count
                (if (= 1 buffer-count) "" "s"))))
-  (setq e::instructions nil)
-  (e::reset-id-counter))
+  (setq e--instructions nil)
+  (e--reset-id-counter))
 
-(defun e:convert-instructions ()
-  "Convert instructions between reference and directive within the selected
-region or at point.
+(defun e-convert-instructions ()
+  "Convert instructions between reference and directive type.
 
-If a region is selected, convert all instructions within the region. If no
+If a region is selected, convert all instructions within the region.  If no
 region is selected, convert only the highest priority instruction at point.
 
-Bodyless directives cannot be converted to references. Attempting to do so
+Bodyless directives cannot be converted to references.  Attempting to do so
 will throw a user error."
   (interactive)
   (let* ((instructions (if (use-region-p)
-                           (e::instructions-in (region-beginning)
+                           (e--instructions-in (region-beginning)
                                                (region-end))
-                         (cl:remove-if #'null
-                                       (list (e::highest-priority-instruction
-                                              (e::instructions-at (point))
+                         (cl-remove-if #'null
+                                       (list (e--highest-priority-instruction
+                                              (e--instructions-at (point))
                                               t)))))
          (num-instructions (length instructions))
          (converted-directives-to-references 0)
@@ -608,16 +610,16 @@ will throw a user error."
         (user-error "No instructions to convert")
       (dolist (instr instructions)
         (cond
-         ((e::directivep instr)
-          (unless (e::bodyless-instruction-p instr)
-            (overlay-put instr 'e:instruction-type 'reference)
+         ((e--directivep instr)
+          (unless (e--bodyless-instruction-p instr)
+            (overlay-put instr 'e-instruction-type 'reference)
             (setq converted-directives-to-references (1+ converted-directives-to-references))))
-         ((e::referencep instr)
-          (overlay-put instr 'e:instruction-type 'directive)
+         ((e--referencep instr)
+          (overlay-put instr 'e-instruction-type 'directive)
           (setq converted-references-to-directives (1+ converted-references-to-directives)))
          (t
           (user-error "Unknown instruction type")))
-        (e::update-instruction-overlay instr t))
+        (e--update-instruction-overlay instr t))
       (let ((msg "Converted %d instruction%s")
             (conversion-msgs
              (delq nil
@@ -633,67 +635,68 @@ will throw a user error."
                                    (if (= converted-references-to-directives 1) "" "s")))))))
         (message (concat
                   msg (if conversion-msgs
-                          (concat ": " (mapconcat 'identity conversion-msgs " and "))
+                          (concat ": " (mapconcat #'identity conversion-msgs " and "))
                         ""))
                  num-instructions
                  (if (> num-instructions 1) "s" ""))
         (when (region-active-p)
           (deactivate-mark))))))
 
-(defun e:next-instruction ()
+(defun e-next-instruction ()
   "Cycle through instructions in the forward direction."
   (interactive)
-  (unless (e::cycle-instruction nil 'next)
-    (e::print-instruction-not-found 'next nil)))
+  (unless (e--cycle-instruction nil 'next)
+    (e--print-instruction-not-found 'next nil)))
 
-(defun e:previous-instruction ()
+(defun e-previous-instruction ()
   "Cycle through instructions in the backward direction."
   (interactive)
-  (unless (e::cycle-instruction nil 'previous)
-    (e::print-instruction-not-found 'previous nil)))
+  (unless (e--cycle-instruction nil 'previous)
+    (e--print-instruction-not-found 'previous nil)))
 
-(defun e:next-reference ()
+(defun e-next-reference ()
   "Cycle through references in the forward direction."
   (interactive)
-  (unless (e::cycle-instruction 'reference 'next)
-    (e::print-instruction-not-found 'next 'reference)))
+  (unless (e--cycle-instruction 'reference 'next)
+    (e--print-instruction-not-found 'next 'reference)))
 
-(defun e:previous-reference ()
+(defun e-previous-reference ()
   "Cycle through references in the backward direction."
   (interactive)
-  (unless (e::cycle-instruction 'reference 'previous)
-    (e::print-instruction-not-found 'previous 'reference)))
+  (unless (e--cycle-instruction 'reference 'previous)
+    (e--print-instruction-not-found 'previous 'reference)))
 
-(defun e:next-directive ()
+(defun e-next-directive ()
   "Cycle through directives in the forward direction."
   (interactive)
-  (unless (e::cycle-instruction 'directive 'next)
-    (e::print-instruction-not-found 'next 'directive)))
+  (unless (e--cycle-instruction 'directive 'next)
+    (e--print-instruction-not-found 'next 'directive)))
 
-(defun e:previous-directive ()
+(defun e-previous-directive ()
   "Cycle through directives in the backward direction."
   (interactive)
-  (unless (e::cycle-instruction 'directive 'previous)
-    (e::print-instruction-not-found 'previous 'directive)))
+  (unless (e--cycle-instruction 'directive 'previous)
+    (e--print-instruction-not-found 'previous 'directive)))
 
-(defun e:preview-directive-prompt ()
+(defun e-preview-directive-prompt ()
   "Preview directive prompt at the current point.
 
 This command is useful to see what is actually being sent to the model."
   (interactive)
-  (let ((directive (e::topmost-instruction (car (e::instructions-at (point) 'directive))
+  (let ((directive (e--topmost-instruction (car (e--instructions-at (point) 'directive))
                                            'directive)))
-    (let ((request-string (e::directive-llm-prompt directive)))
+    (let ((request-string (e--directive-llm-prompt directive)))
       (let ((bufname "*evedel-directive-preview*"))
         (with-output-to-temp-buffer bufname
           (princ (format "<!-- SYSTEM: %s -->"
                          (replace-regexp-in-string "\n"
                                                    "\n# "
-                                                   (e::directive-llm-system-message directive))))
+                                                   (e--directive-llm-system-message directive))))
           (princ "\n\n")
           (princ request-string)
           (with-current-buffer bufname
-            (markdown-mode)
+            (when (fboundp 'markdown-mode)
+              (markdown-mode))
             (read-only-mode 1)
             (visual-line-mode 1)
             (display-line-numbers-mode 1)
@@ -702,7 +705,7 @@ This command is useful to see what is actually being sent to the model."
               (define-key local-map (kbd "q") 'quit-window)
               (use-local-map local-map))))))))
 
-(defun e:modify-directive-tag-query ()
+(defun e-modify-directive-tag-query ()
   "Prompt minibuffer to enter a tag search query for a directive.
 
 The directive in question is either the directive under the curent point.
@@ -717,70 +720,71 @@ Examples:
   (cat or dog or (sheep and black))
   ((cat and dog) or (dog and goose))"
   (interactive)
-  (if-let ((directive (e::topmost-instruction
-                         (e::highest-priority-instruction (e::instructions-at (point)) t)
-                         'directive)))
-      (e::read-directive-tag-query directive)
+  (if-let ((directive (e--topmost-instruction
+                       (e--highest-priority-instruction (e--instructions-at (point)) t)
+                       'directive)))
+      (e--read-directive-tag-query directive)
     (user-error "No directive at point")))
 
-(defun e:add-tags (&optional reference)
+(defun e-add-tags (&optional reference)
   "Add tags to the reference under the point.
 
 Adds specificly to REFERENCE if it is non-nil."
   (interactive)
-  (let* ((instructions (e::instructions-at (point) 'reference))
-         (instr (or reference (e::highest-priority-instruction instructions t))))
+  (let* ((instructions (e--instructions-at (point) 'reference))
+         (instr (or reference (e--highest-priority-instruction instructions t))))
     (if instr
-        (let* ((existing-tags (e::available-tags))
+        (let* ((existing-tags (e--available-tags))
                (input (completing-read-multiple "Add tags (or leave empty): "
                                                 existing-tags nil nil))
-               (new-tags (mapcar 'intern input)))
-            (let ((added (e::add-tags instr new-tags)))
-              (message "%d tag%s added" added (if (= added 1) "" "s"))))
+               (new-tags (mapcar #'intern input)))
+          (let ((added (e--add-tags instr new-tags)))
+            (message "%d tag%s added" added (if (= added 1) "" "s"))))
       (user-error "No reference at point"))))
 
-(defun e:remove-tags ()
+(defun e-remove-tags ()
   "Remove tags from the reference under the point."
   (interactive)
-  (let* ((instructions (e::instructions-at (point) 'reference))
-         (instr (e::highest-priority-instruction instructions t)))
+  (let* ((instructions (e--instructions-at (point) 'reference))
+         (instr (e--highest-priority-instruction instructions t)))
     (if instr
-        (let ((tags-list (e::reference-tags instr)))
+        (let ((tags-list (e--reference-tags instr)))
           (if (null tags-list)
               (user-error "Reference has no tags of its own to remove")
             ;; Prompt the user to remove tags.
             (let* ((input (completing-read-multiple "Remove tags: " tags-list nil t))
-                   (tags-to-remove (mapcar 'intern input)))
-              (let ((removed (e::remove-tags instr tags-to-remove)))
+                   (tags-to-remove (mapcar #'intern input)))
+              (let ((removed (e--remove-tags instr tags-to-remove)))
                 (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
       (user-error "No reference at point"))))
 
+(declare-function e--instruction-with-id "evedel.el")
 (let ((map (make-hash-table)))
-  (cl:defun e::instruction-with-id (target-id)
+  (cl-defun e--instruction-with-id (target-id)
     "Return the instruction with the given integer TARGET-ID.
 
 Returns nil if no instruction with the spcific id was found."
     (when-let ((instr (gethash target-id map)))
       (when (buffer-live-p instr)
-        (cl:return-from e::instruction-with-id instr)))
+        (cl-return-from e--instruction-with-id instr)))
     (setq map (make-hash-table))
-    (e::foreach-instruction instr
-      do (puthash (e::instruction-id instr) instr map))
+    (e--foreach-instruction instr
+                            do (puthash (e--instruction-id instr) instr map))
     (gethash target-id map)))
 
-(cl:defun e::patch-save-file (save-file)
+(cl-defun e--patch-save-file (save-file)
   "Return a patched SAVE-FILE that matches the current version."
   (let ((save-file-version (plist-get save-file :version))
         (new-save-file ()))
-    (when (string= save-file-version (e:version))
-      (cl:return-from e::patch-save-file save-file))
-    (cl:labels ((recreate-instr-ids (files-alist)
-                  (let ((e::id-counter 0)
-                        (e::id-usage-map (make-hash-table))
-                        (e::retired-ids ()))
-                    (cl:loop for (_ . file-plist) in files-alist
+    (when (string= save-file-version (e-version))
+      (cl-return-from e--patch-save-file save-file))
+    (cl-labels ((recreate-instr-ids (files-alist)
+                  (let ((e--id-counter 0)
+                        (e--id-usage-map (make-hash-table))
+                        (e--retired-ids ()))
+                    (cl-loop for (_ . file-plist) in files-alist
                              do (let ((instr-plists (plist-get file-plist :instructions)))
-                                  (cl:loop for instr-plist in instr-plists
+                                  (cl-loop for instr-plist in instr-plists
                                            do (let ((ov-props (plist-get instr-plist :properties)))
                                                 (with-temp-buffer
                                                   (let ((ov (make-overlay 1 1)))
@@ -789,82 +793,82 @@ Returns nil if no instruction with the spcific id was found."
                                                                          prop
                                                                          (plist-get ov-props prop)))
                                                           ov-props)
-                                                    (overlay-put ov 'e:id (e::create-id))
+                                                    (overlay-put ov 'e-id (e--create-id))
                                                     (plist-put instr-plist
                                                                :properties
                                                                (overlay-properties ov))))))))
-                    (cl:values files-alist e::id-counter e::id-usage-map e::retired-ids)))
+                    (cl-values files-alist e--id-counter e--id-usage-map e--retired-ids)))
                 (recreate-id-counter (files-alist)
-                  (cl:multiple-value-bind (files-alist id-counter id-usage-map retired-ids)
+                  (cl-multiple-value-bind (files-alist id-counter id-usage-map retired-ids)
                       (recreate-instr-ids files-alist)
-                    (cl:values
+                    (cl-values
                      (list :id-counter id-counter
                            :used-ids (hash-table-keys id-usage-map)
                            :retired-ids retired-ids)
                      files-alist))))
-    ;; There is no save file version available.  This means we are using a save file whose version
-    ;; is v0.4.7 or older.  Only v0.4.7 is newer support backward save compatibility.
-    ;;
-    ;; This branch updates version v0.4.7 to the latest version by adding ids to the existing
-    ;; instructions, and changing the save file to include the latest version number and the id
-    ;; counter.
-    (if (null save-file-version)
-        (condition-case err
-            (cl:multiple-value-bind (ids-plist files-alist) (recreate-id-counter save-file)
-              (setq new-save-file (plist-put new-save-file :ids ids-plist))
-              (setq new-save-file (plist-put new-save-file :files files-alist)))
-          (error
-           (error "Error patching a versionless save file.
+      ;; There is no save file version available.  This means we are using a save file whose version
+      ;; is v0.4.7 or older.  Only v0.4.7 is newer support backward save compatibility.
+      ;;
+      ;; This branch updates version v0.4.7 to the latest version by adding ids to the existing
+      ;; instructions, and changing the save file to include the latest version number and the id
+      ;; counter.
+      (if (null save-file-version)
+          (condition-case err
+              (cl-multiple-value-bind (ids-plist files-alist) (recreate-id-counter save-file)
+                (setq new-save-file (plist-put new-save-file :ids ids-plist))
+                (setq new-save-file (plist-put new-save-file :files files-alist)))
+            (error
+             (error "Error patching a versionless save file.
 
 Save file backward compatibility was added in v0.4.7.  If the save file is older than that, then \
 unfortunately it is no longer supported.  If the save file is from v0.4.7 or newer, then this is a \
 bug that you should report.
 
 The error: %s" err)))
-      (pcase save-file-version
-        ("v0.4.9"
-         ;; v0.4.9 had a problem where overlays which were deleted extrajudicially did not retire
-         ;; their id number, causing the id to be used perpetually.  This patch cleans the used id
-         ;; list.
-         (cl:multiple-value-bind (ids-plist files-alist)
-             (recreate-id-counter (plist-get save-file :files))
-           (setq new-save-file (plist-put new-save-file :ids ids-plist))
-           (setq new-save-file (plist-put new-save-file :files files-alist))))
-        ;; Save file is a newer version, but needs no patching.  We would still like to display
-        ;; a message indicating that the file underwent a patching procedure.
-        (_ (setq new-save-file save-file))))
-    (if new-save-file
-        (progn
-          (message "Patched loaded save file to version %s" (e:version))
-          (setq new-save-file (plist-put new-save-file :version (e:version)))
-          new-save-file)
-      save-file))))
+        (pcase save-file-version
+          ("v0.4.9"
+           ;; v0.4.9 had a problem where overlays which were deleted extrajudicially did not retire
+           ;; their id number, causing the id to be used perpetually.  This patch cleans the used id
+           ;; list.
+           (cl-multiple-value-bind (ids-plist files-alist)
+               (recreate-id-counter (plist-get save-file :files))
+             (setq new-save-file (plist-put new-save-file :ids ids-plist))
+             (setq new-save-file (plist-put new-save-file :files files-alist))))
+          ;; Save file is a newer version, but needs no patching.  We would still like to display
+          ;; a message indicating that the file underwent a patching procedure.
+          (_ (setq new-save-file save-file))))
+      (if new-save-file
+          (progn
+            (message "Patched loaded save file to version %s" (e-version))
+            (setq new-save-file (plist-put new-save-file :version (e-version)))
+            new-save-file)
+        save-file))))
 
-(defun e::instruction-id (instruction)
-  (overlay-get instruction 'e:id))
+(defun e--instruction-id (instruction)
+  (overlay-get instruction 'e-id))
 
-(defun e::stashed-buffer-instructions (buffer)
-  (e::foreach-instruction (instr buffer)
-    collect (list :overlay-start (overlay-start instr)
-                  :overlay-end (overlay-end instr)
-                  :properties (overlay-properties instr))))
+(defun e--stashed-buffer-instructions (buffer)
+  (e--foreach-instruction (instr buffer)
+                          collect (list :overlay-start (overlay-start instr)
+                                        :overlay-end (overlay-end instr)
+                                        :properties (overlay-properties instr))))
 
-(defun e::stash-buffer (buffer &optional file-contents)
-  (let ((instrs (e::stashed-buffer-instructions buffer)))
+(defun e--stash-buffer (buffer &optional file-contents)
+  (let ((instrs (e--stashed-buffer-instructions buffer)))
     (when instrs
       (with-current-buffer buffer
         (let ((original-content (or file-contents (buffer-substring-no-properties (point-min)
                                                                                   (point-max)))))
-          (setf (alist-get buffer e::instructions)
+          (setf (alist-get buffer e--instructions)
                 (list :original-content original-content
                       :instructions instrs)
-                (car (assoc buffer e::instructions))
+                (car (assoc buffer e--instructions))
                 (buffer-file-name buffer))
-          (mapc #'delete-overlay (e::instructions-in (point-min) (point-max))))))))
+          (mapc #'delete-overlay (e--instructions-in (point-min) (point-max))))))))
 
-(defun e::read-directive-tag-query (directive)
+(defun e--read-directive-tag-query (directive)
   "Prompt user to enter a directive tag query text via minibuffer for DIRECTIVE."
-  (let ((original-tag-query (overlay-get directive 'e:directive-infix-tag-query-string))
+  (let ((original-tag-query (overlay-get directive 'e-directive-infix-tag-query-string))
         (timer nil)
         (minibuffer-message))
     (minibuffer-with-setup-hook
@@ -887,14 +891,14 @@ The error: %s" err)))
                                    (let ((query (read (concat "("
                                                               (minibuffer-contents)
                                                               ")"))))
-                                     (let ((refs (e::filter-references
-                                                  (e::tag-query-prefix-from-infix query)))
+                                     (let ((refs (e--filter-references
+                                                  (e--tag-query-prefix-from-infix query)))
                                            (total-count 0)
                                            (buffer-count 0))
-                                       (cl:loop with bufhash = (make-hash-table)
+                                       (cl-loop with bufhash = (make-hash-table)
                                                 for ref in refs
                                                 do (progn
-                                                     (cl:incf total-count)
+                                                     (cl-incf total-count)
                                                      (puthash (overlay-buffer ref) t bufhash))
                                                 finally (setq buffer-count
                                                               (hash-table-count bufhash)))
@@ -915,27 +919,27 @@ The error: %s" err)))
                                                  (substring-no-properties
                                                   (or original-tag-query "")))))
             (let ((parsed-prefix-tag-query
-                   (e::tag-query-prefix-from-infix (read (concat "(" tag-query ")")))))
-              (overlay-put directive 'e:directive-prefix-tag-query parsed-prefix-tag-query)
+                   (e--tag-query-prefix-from-infix (read (concat "(" tag-query ")")))))
+              (overlay-put directive 'e-directive-prefix-tag-query parsed-prefix-tag-query)
               (if (string-empty-p tag-query)
-                  (overlay-put directive 'e:directive-infix-tag-query-string nil)
+                  (overlay-put directive 'e-directive-infix-tag-query-string nil)
                 (overlay-put directive
-                             'e:directive-infix-tag-query-string
+                             'e-directive-infix-tag-query-string
                              ;; Since Emacs doesn't have negative-lookaheads, we have to make due
                              ;; by first applying the face we want the symbols to be, and then
                              ;; applying the default face on everything we don't want to match.
-                             (e::apply-face-to-match "\\b\\(?:(*not\\|or\\|and\\)\\b\\|(\\|)"
-                                                     (e::apply-face-to-match
+                             (e--apply-face-to-match "\\b\\(?:(*not\\|or\\|and\\)\\b\\|(\\|)"
+                                                     (e--apply-face-to-match
                                                       "\\(:?.+\\)"
                                                       tag-query
                                                       'font-lock-constant-face)
                                                      nil))
-                (overlay-put directive 'e:directive-status nil)))
-            (e::update-instruction-overlay directive t))
-        (error 
+                (overlay-put directive 'e-directive-status nil)))
+            (e--update-instruction-overlay directive t))
+        (error
          (message (error-message-string err)))))))
-            
-(defun e::print-instruction-not-found (direction type)
+
+(defun e--print-instruction-not-found (direction type)
   "Print a not found message for the given DIRECTION and TYPE."
   (let ((type-string (pcase type
                        ('directive "directive")
@@ -945,60 +949,60 @@ The error: %s" err)))
              (if (eq direction 'next) "next" "previous")
              type-string)))
 
-(cl:defun e::reference-matches-query-p (reference query)
+(cl-defun e--reference-matches-query-p (reference query)
   "Return t only if REFERENCE matches the tag QUERY."
   (unless reference
-    (cl:return-from e::reference-matches-query-p nil))
-  (let ((atoms (cl:remove-duplicates (cl:remove-if (lambda (elm)
+    (cl-return-from e--reference-matches-query-p nil))
+  (let ((atoms (cl-remove-duplicates (cl-remove-if (lambda (elm)
                                                      (member elm '(not or and nil)))
                                                    (flatten-tree query)))))
-    (if (and (null atoms) e:empty-tag-query-matches-all)
+    (if (and (null atoms) e-empty-tag-query-matches-all)
         t
-      (let ((tags (e::reference-tags reference t))
-            (direct-tags (e::reference-tags reference nil))
+      (let ((tags (e--reference-tags reference t))
+            (direct-tags (e--reference-tags reference nil))
             (instr-id (lambda (tag) (let ((tagname (symbol-name tag)))
                                       (when (string-match "^id:\\([1-9][0-9]*\\)$" tagname)
                                         (string-to-number (match-string 1 tagname)))))))
-        (if (and (null direct-tags) e:always-match-untagged-references)
+        (if (and (null direct-tags) e-always-match-untagged-references)
             t
           (let ((atom-bindings (mapcar (lambda (atom)
                                          (pcase atom
                                            ('is:bufferlevel
-                                            (e::instruction-bufferlevel-p reference))
+                                            (e--instruction-bufferlevel-p reference))
                                            ('is:subreference
-                                            (e::parent-instruction reference 'reference))
+                                            (e--parent-instruction reference 'reference))
                                            ('is:tagless
                                             (null tags))
                                            ('is:directly-tagless
-                                            (null (e::reference-tags reference nil)))
+                                            (null (e--reference-tags reference nil)))
                                            ('is:with-commentary
-                                            (not (string-empty-p (e::commentary-text reference))))
+                                            (not (string-empty-p (e--commentary-text reference))))
                                            (_ (if-let ((id (funcall instr-id atom)))
-                                                  (= id (e::instruction-id reference))
+                                                  (= id (e--instruction-id reference))
                                                 (member atom tags)))))
                                        atoms)))
-            (cl:progv atoms atom-bindings
+            (cl-progv atoms atom-bindings
               (eval query))))))))
 
-(defun e::filter-references (query)
+(defun e--filter-references (query)
   "Return a list of all references filtered by the tag QUERY.
 
 See `evedel--tag-query-prefix-from-infix' for QUERY format."
-  (let ((atoms (cl:remove-duplicates (cl:remove-if (lambda (elm)
+  (let ((atoms (cl-remove-duplicates (cl-remove-if (lambda (elm)
                                                      (member elm '(not or and nil)))
                                                    (flatten-tree query)))))
-    (if (and (null atoms) e:empty-tag-query-matches-all)
-        (e::foreach-instruction instr when (e::referencep instr) collect instr)
-      (e::foreach-instruction instr
-        when (and (e::referencep instr)
-                  (e::reference-matches-query-p instr query))
-        collect instr))))
+    (if (and (null atoms) e-empty-tag-query-matches-all)
+        (e--foreach-instruction instr when (e--referencep instr) collect instr)
+      (e--foreach-instruction instr
+                              when (and (e--referencep instr)
+                                        (e--reference-matches-query-p instr query))
+                              collect instr))))
 
-(defun e::tag-query-prefix-from-infix (query)
+(defun e--tag-query-prefix-from-infix (query)
   "Transform the tag QUERY to prefix notation for Lisp.
   
 Signals an error when the query is malformed."
-  (cl:labels ((operatorp (elm)
+  (cl-labels ((operatorp (elm)
                 (member elm '(and or not)))
               (unary-op-p (elm)
                 (eq elm 'not))
@@ -1051,7 +1055,7 @@ Signals an error when the query is malformed."
                                   (setq operatorless-arg (aux elm))
                                 (setq operatorless-arg `(not ,(aux elm)))
                                 (setq negate-next-expr nil))
-                            (cl:symbol-macrolet ((dst (if (eq operator 'and)
+                            (cl-symbol-macrolet ((dst (if (eq operator 'and)
                                                           multiplicative-exprs
                                                         args)))
                               (when operatorless-arg
@@ -1081,29 +1085,29 @@ Signals an error when the query is malformed."
                          (when multiplicative-exprs
                            `(and ,@(nreverse multiplicative-exprs))))))))))
     (aux query)))
-                 
-(defun e::available-tags ()
+
+(defun e--available-tags ()
   "Return a list of all the tags in the loaded references."
   (let ((tags-hash (make-hash-table)))
-    (e::foreach-instruction (ref)
-      do (when (e::referencep ref)
-           (cl:loop for tag in (e::reference-tags ref)
-                    do (puthash tag t tags-hash))))
+    (e--foreach-instruction (ref)
+                            do (when (e--referencep ref)
+                                 (cl-loop for tag in (e--reference-tags ref)
+                                          do (puthash tag t tags-hash))))
     (hash-table-keys tags-hash)))
 
-(defun e::cycle-list-around (element list)
+(defun e--cycle-list-around (element list)
   "Cycle list LIST around ELEMENT.
 
-If ELEMENT is found in LIST, returns a list with ELEMENT as the head and the rest
-of the list rotated around it.  Otherwise, returns the LIST."
+If ELEMENT is found in LIST, returns a list with ELEMENT as the head and the
+rest of the list rotated around it.  Otherwise, returns the LIST."
   (if-let ((element-tail (member element list)))
       (append element-tail 
-              (cl:loop for elt in list
+              (cl-loop for elt in list
                        while (not (eq elt element))
                        collect elt))
     list))
 
-(defun e::cycle-instruction (type direction)
+(defun e--cycle-instruction (type direction)
   "Get the next or previous instruction overlay of TYPE.
 DIRECTION should be `next' or `previous' from the current point.
 
@@ -1112,25 +1116,25 @@ the `evedel--instructions' alist.
 
 Returns the found instruction, if any."
   ;; We want the buffers to be a cyclic list, based on the current buffer.
-  (let* ((buffers (let ((bufs (mapcar #'car e::instructions)))
+  (let* ((buffers (let ((bufs (mapcar #'car e--instructions)))
                     (if (eq direction 'next)
-                        (e::cycle-list-around (current-buffer) bufs)
-                      (e::cycle-list-around (current-buffer) (nreverse bufs)))))
+                        (e--cycle-list-around (current-buffer) bufs)
+                      (e--cycle-list-around (current-buffer) (nreverse bufs)))))
          (original-buffer (current-buffer))
          (found-instr))
     (while (and buffers (null found-instr))
       (let* ((buffer (car buffers))
-             (instrs (e::foreach-instruction (instr buffer) collect instr)))
+             (instrs (e--foreach-instruction (instr buffer) collect instr)))
         (setq buffers (delq buffer buffers))
         (when type
-          (setq instrs (cl:remove-if-not (lambda (instr)
-                                           (eq (e::instruction-type instr) type))
+          (setq instrs (cl-remove-if-not (lambda (instr)
+                                           (eq (e--instruction-type instr) type))
                                          instrs)))
         (let ((sorting-pred (pcase direction
                               ('next #'<)
                               ('previous #'>))))
           (when (eq buffer original-buffer)
-            (setq instrs (cl:remove-if-not (lambda (instr)
+            (setq instrs (cl-remove-if-not (lambda (instr)
                                              (funcall sorting-pred
                                                       (point)
                                                       (overlay-start instr)))
@@ -1147,92 +1151,92 @@ Returns the found instruction, if any."
             (setq found-instr instruction)))))
     found-instr))
 
-(defun e::add-tags (reference tags)
+(defun e--add-tags (reference tags)
   "Add TAGS to REFERENCE.
 
 TAGS should be a list of symbols.
 Returns the number of new tags added."
-  (let* ((tag-type 'e:reference-tags)
+  (let* ((tag-type 'e-reference-tags)
          (existing-tags (overlay-get reference tag-type))
-         (new-tags (cl:remove-if (lambda (tag) (member tag existing-tags)) tags)))
-    (overlay-put reference tag-type (cl:union existing-tags new-tags :test 'eq))
+         (new-tags (cl-remove-if (lambda (tag) (member tag existing-tags)) tags)))
+    (overlay-put reference tag-type (cl-union existing-tags new-tags :test 'eq))
     (let ((added (length new-tags)))
       (when (> added 0)
-        (e::update-instruction-overlay reference t))
+        (e--update-instruction-overlay reference t))
       added)))
 
-(defun e::remove-tags (reference tags)
+(defun e--remove-tags (reference tags)
   "Remove TAGS from REFERENCE.
 
 TAGS should be a list of symbols.
 Returns the number of tags removed."
-  (let* ((tag-type 'e:reference-tags)
+  (let* ((tag-type 'e-reference-tags)
          (existing-tags (overlay-get reference tag-type))
-         (new-tags (cl:set-difference existing-tags tags :test 'eq)))
+         (new-tags (cl-set-difference existing-tags tags :test 'eq)))
     (overlay-put reference tag-type new-tags)
     (let ((removed (- (length existing-tags) (length new-tags))))
       (when (> removed 0)
-        (e::update-instruction-overlay reference t))
+        (e--update-instruction-overlay reference t))
       removed)))
 
-(defun e::inherited-tags (reference)
+(defun e--inherited-tags (reference)
   "Return the list of all tags that REFERENCE inherits from its parents."
-  (when-let ((parent (e::parent-instruction reference 'reference)))
-    (e::reference-tags parent t)))
+  (when-let ((parent (e--parent-instruction reference 'reference)))
+    (e--reference-tags parent t)))
 
-(defun e::reference-tags (reference &optional include-parent-tags)
+(defun e--reference-tags (reference &optional include-parent-tags)
   "Return the list of tags for the given REFERENCE.
 
-If INCLUDE-PARENT-TAG is non-nil, gets te parent's tags as well."
+If INCLUDE-PARENT-TAGS is non-nil, gets te parent's tags as well."
   (if (not include-parent-tags)
-      (overlay-get reference 'e:reference-tags)
-    (append (overlay-get reference 'e:reference-tags)
-            (when-let ((parent (e::parent-instruction reference 'reference)))
-              (e::reference-tags parent t)))))
+      (overlay-get reference 'e-reference-tags)
+    (append (overlay-get reference 'e-reference-tags)
+            (when-let ((parent (e--parent-instruction reference 'reference)))
+              (e--reference-tags parent t)))))
 
-(defun e::delete-instruction-at (point)
+(defun e--delete-instruction-at (point)
   "Delete the instruction at POINT.
 
 Returns the deleted instruction overlay."
-  (let* ((instructions (e::instructions-at point))
-         (target (e::highest-priority-instruction instructions t)))
+  (let* ((instructions (e--instructions-at point))
+         (target (e--highest-priority-instruction instructions t)))
     (when target
-      (e::delete-instruction target))))
+      (e--delete-instruction target))))
 
-(defun e::being-processed-p (instruction)
+(defun e--being-processed-p (instruction)
   "Return non-nil if the directive INSTRUCTION is being processed."
-  (eq (overlay-get instruction 'e:directive-status) 'processing))
+  (eq (overlay-get instruction 'e-directive-status) 'processing))
 
-(defun e::directive-empty-p (directive)
+(defun e--directive-empty-p (directive)
   "Check if DIRECTIVE is empty.
 
 A directive is empty if it does not have a body or secondary directives."
   (let ((subdirectives
-         (cl:remove-if-not #'e::directivep
-                           (e::wholly-contained-instructions (overlay-buffer directive)
+         (cl-remove-if-not #'e--directivep
+                           (e--wholly-contained-instructions (overlay-buffer directive)
                                                              (overlay-start directive)
                                                              (overlay-end directive)))))
-    (not (cl:some (lambda (subdir)
-                    (not (string-empty-p (e::directive-text subdir))))
+    (not (cl-some (lambda (subdir)
+                    (not (string-empty-p (e--directive-text subdir))))
                   subdirectives))))
 
-(defun e::create-instruction (type)
+(defun e--create-instruction (type)
   "Create or scale an instruction of the given TYPE within the selected region.
 
 If a region is selected but partially covers an existing instruction, then the
-function will resize it. See either `evedel-create-reference' or
+function will resize it.  See either `evedel-create-reference' or
 `evedel-create-directive' for details on how the resizing works."
   (if (use-region-p)
       (let ((intersecting-instructions
-             (cl:remove-if (lambda (instr)
+             (cl-remove-if (lambda (instr)
                              (xor (= (overlay-start instr) (region-beginning))
                                   (= (overlay-end instr) (region-end))))
-                           (e::partially-contained-instructions (current-buffer)
+                           (e--partially-contained-instructions (current-buffer)
                                                                 (region-beginning)
                                                                 (region-end)))))
         (if-let ((instructions
-                  (cl:remove-if-not (lambda (instr)
-                                      (eq (e::instruction-type instr) type))
+                  (cl-remove-if-not (lambda (instr)
+                                      (eq (e--instruction-type instr) type))
                                     intersecting-instructions)))
             (progn
               (dolist (instruction instructions)
@@ -1243,22 +1247,22 @@ function will resize it. See either `evedel-create-reference' or
                   (if (> (mark) (point))
                       (setf (overlay-start instruction) (point))
                     (setf (overlay-end instruction) (point))))
-                (e::update-instruction-overlay instruction))
+                (e--update-instruction-overlay instruction))
               (when instructions
                 (deactivate-mark)))
-          ;; Else: there are no partially contained instructions of the same type within the
+          ;; Else- there are no partially contained instructions of the same type within the
           ;; region...
           (when (or intersecting-instructions
-                    (or (cl:some (lambda (instr)
+                    (or (cl-some (lambda (instr)
                                    (and (= (overlay-start instr) (region-beginning))
                                         (= (overlay-end instr) (region-end))))
-                                 (e::instructions-in (region-beginning) (region-end)))))
+                                 (e--instructions-in (region-beginning) (region-end)))))
             ;; ...but there are intersecting instructions of another type, or another instruction
             ;; existing precisely at the start of another.
             (user-error "Instruction intersects with existing instruction"))
           (let* ((buffer (current-buffer))
                  (instruction (if (eq type 'reference)
-                                  (e::create-reference-in buffer
+                                  (e--create-reference-in buffer
                                                           (region-beginning)
                                                           (region-end))
                                 (save-window-excursion
@@ -1268,19 +1272,19 @@ function will resize it. See either `evedel-create-reference' or
                                                         (max (point-min)
                                                              (- (region-beginning)
                                                                 (- (window-end) (window-start))))))
-                                    (e::create-directive-in buffer
+                                    (e--create-directive-in buffer
                                                             (region-beginning)
                                                             (region-end)))))))
             (with-current-buffer buffer
               (deactivate-mark)
               (when (eq type 'reference)
-                (e:add-tags instruction)))
+                (e-add-tags instruction)))
             instruction)))
     (when (eq type 'directive)
-      (prog1 (e::create-directive-in (current-buffer) (point) (point) t)
+      (prog1 (e--create-directive-in (current-buffer) (point) (point) t)
         (deactivate-mark)))))
 
-(cl:defun e::process-directive-llm-response (response info)
+(cl-defun e--process-directive-llm-response (response info)
   "Process RESPONSE string.  See `gptel-request' regarding INFO.
 
 Removes any superfluous markup formatting and indents the response according to
@@ -1288,28 +1292,28 @@ the current buffer."
   (let ((directive (plist-get info :context)))
     (unless (overlay-buffer directive)
       ;; Directive is gone...
-      (cl:return-from e::process-directive-llm-response))
-    (unless (eq (overlay-get directive 'e:directive-status) 'processing)
+      (cl-return-from e--process-directive-llm-response))
+    (unless (eq (overlay-get directive 'e-directive-status) 'processing)
       ;; The directive has been modified.  Do not continue.
-      (cl:return-from e::process-directive-llm-response))
-    (cl:flet ((mark-failed (reason)
-                (overlay-put directive 'e:directive-status 'failed)
-                (overlay-put directive 'e:directive-fail-reason reason)))
+      (cl-return-from e--process-directive-llm-response))
+    (cl-flet ((mark-failed (reason)
+                (overlay-put directive 'e-directive-status 'failed)
+                (overlay-put directive 'e-directive-fail-reason reason)))
       (if (null response)
           (mark-failed (plist-get info :status))
         ;; Parse response that's delimited by Markdown code blocks.
         (if (not (string-match "```+.*\n\\(\\(?:.+\\|\n\\)+\\)\n```+" response))
             (mark-failed response)
           (let ((parsed-response (match-string 1 response)))
-            (overlay-put directive 'e:directive-status 'succeeded)
+            (overlay-put directive 'e-directive-status 'succeeded)
             (with-current-buffer (overlay-buffer directive)
               (let ((beg (overlay-start directive))
                     (end (overlay-end directive)))
                 ;; Delete any child directives of the top-level directive.
-                (let ((child-directives (cl:remove-if-not #'e::directivep
-                                                          (e::child-instructions directive))))
+                (let ((child-directives (cl-remove-if-not #'e--directivep
+                                                          (e--child-instructions directive))))
                   (dolist (child-directive child-directives)
-                    (e::delete-instruction child-directive)))
+                    (e--delete-instruction child-directive)))
                 (save-excursion
                   (goto-char beg)
                   ;; Insert a dummy character so that the overlay won't be deleted when we erase the
@@ -1324,29 +1328,29 @@ the current buffer."
                     (unless (eq indent-line-function #'indent-relative)
                       (indent-region beg end)))
                   (overlay-put directive 'evaporate t))))))))
-    (e::update-instruction-overlay directive t)))
+    (e--update-instruction-overlay directive t)))
 
-(defun e::referencep (instruction)
-  (eq (e::instruction-type instruction) 'reference))
+(defun e--referencep (instruction)
+  (eq (e--instruction-type instruction) 'reference))
 
-(defun e::directivep (instruction)
-  (eq (e::instruction-type instruction) 'directive))
+(defun e--directivep (instruction)
+  (eq (e--instruction-type instruction) 'directive))
 
-(defun e::tint (source-color-name tint-color-name &optional intensity)
+(defun e--tint (source-color-name tint-color-name &optional intensity)
   "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
 
 INTENSITY controls the tinting intensity, where 0 means no tinting and 1 means
 that the resulting color is the same as the TINT-COLOR-NAME color."
   (let* ((tint (color-name-to-rgb tint-color-name))
          (color (color-name-to-rgb source-color-name))
-         (result (cl:mapcar (lambda (color tint)
+         (result (cl-mapcar (lambda (color tint)
                               (+ (* (- 1.0 intensity) color)
                                  (* intensity tint)))
                             color
                             tint)))
     (apply 'color-rgb-to-hex `(,@result 2))))
 
-(cl:defun e::highest-priority-instruction (instructions &optional return-highlighted)
+(cl-defun e--highest-priority-instruction (instructions &optional return-highlighted)
   "Return the instruction with the highest priority from the INSTRUCTIONS list.
 
 Priority here refers to the priority property used by overlays.
@@ -1355,31 +1359,31 @@ If RETURN-HIGHLIGHTED is non-nil and `evedel--highlighted-instruction' is
 non-nil, the function will return `evedel--highlighted-instruction' if it is
 also in the INSTRUCTIONS list."
   (when (and return-highlighted
-             e::highlighted-instruction
-             (member e::highlighted-instruction instructions))
-    (cl:return-from e::highest-priority-instruction e::highlighted-instruction))
-  (cl:reduce (lambda (acc instruction)
+             e--highlighted-instruction
+             (member e--highlighted-instruction instructions))
+    (cl-return-from e--highest-priority-instruction e--highlighted-instruction))
+  (cl-reduce (lambda (acc instruction)
                (if (or (not acc)
                        (> (or (overlay-get instruction 'priority)
-                              e::default-instruction-priority)
+                              e--default-instruction-priority)
                           (or (overlay-get acc 'priority)
-                              e::default-instruction-priority)))
+                              e--default-instruction-priority)))
                    instruction
                  acc))
              instructions
              :initial-value nil))
 
-(defun e::instruction-type (instruction)
+(defun e--instruction-type (instruction)
   "Return the type of the INSTRUCTION overlay.
 
 Instruction type can either be `reference' or `directive'."
-  (if-let ((type (overlay-get instruction 'e:instruction-type)))
+  (if-let ((type (overlay-get instruction 'e-instruction-type)))
       type
     (error "%s is not an instruction overlay" instruction)))
 
-(defun e::create-instruction-overlay-in (buffer start end)
+(defun e--create-instruction-overlay-in (buffer start end)
   "Create an overlay in BUFFER from START to END of the lines."
-  (make-local-variable 'e::after-change-functions-hooked)
+  (make-local-variable 'e--after-change-functions-hooked)
   (with-current-buffer buffer
     (let ((is-bufferlevel
            ;; Check if the overlay spans the start and end of the buffer.  If it does, make it
@@ -1388,47 +1392,47 @@ Instruction type can either be `reference' or `directive'."
            ;; to "invalidate" the buffer-level status of the instruction.
            (and (= start (point-min)) (= end (point-max)))))
       (let ((overlay (make-overlay start end (current-buffer) nil is-bufferlevel)))
-        (overlay-put overlay 'e:instruction t)
-        (overlay-put overlay 'e:id (e::create-id))
-        (push overlay (alist-get buffer e::instructions))
-        (unless (bound-and-true-p e::after-change-functions-hooked)
-          (setq-local e::after-change-functions-hooked t)
+        (overlay-put overlay 'e-instruction t)
+        (overlay-put overlay 'e-id (e--create-id))
+        (push overlay (alist-get buffer e--instructions))
+        (unless (bound-and-true-p e--after-change-functions-hooked)
+          (setq-local e--after-change-functions-hooked t)
           (add-hook 'after-change-functions
                     (lambda (beg end _len)
                       (let ((beg (max (point-min) (1- beg)))
                             (end (min (point-max) (1+ end))))
-                        (let ((affected-instructions (e::instructions-in beg end)))
+                        (let ((affected-instructions (e--instructions-in beg end)))
                           (dolist (instruction affected-instructions)
-                            (e::update-instruction-overlay instruction)))))
+                            (e--update-instruction-overlay instruction)))))
                     nil t))
-        (e::setup-buffer-hooks buffer)
+        (e--setup-buffer-hooks buffer)
         overlay))))
 
-(defun e::instruction-p (overlay)
+(defun e--instruction-p (overlay)
   "Return non-nil if OVERLAY is an instruction overlay."
-  (overlay-get overlay 'e:instruction))
+  (overlay-get overlay 'e-instruction))
 
-(defun e::parent-instruction (instruction &optional of-type)
+(defun e--parent-instruction (instruction &optional of-type)
   "Return the parent of the given INSTRUCTION overlay.
 
 If OF-TYPE is non-nil, returns the parent with the given type."
   (with-current-buffer (overlay-buffer instruction)
     (let ((beg (overlay-start instruction))
           (end (overlay-end instruction)))
-      (e::highest-priority-instruction (cl:remove-if-not (lambda (instr)
+      (e--highest-priority-instruction (cl-remove-if-not (lambda (instr)
                                                            (and (not (eq instr instruction))
                                                                 (or (null of-type)
-                                                                    (eq (e::instruction-type instr)
+                                                                    (eq (e--instruction-type instr)
                                                                         of-type))
                                                                 (<= (overlay-start instr) beg
                                                                     end (overlay-end instr))))
-                                                         (e::instructions-in beg end))))))
+                                                         (e--instructions-in beg end))))))
 
-(defun e::bodyless-instruction-p (instr)
-  "Returns non-nil if the instruction has a body."
+(defun e--bodyless-instruction-p (instr)
+  "Return non-nil if the INSTR instruction has a body."
   (= (overlay-start instr) (overlay-end instr)))
 
-(defun e::subinstruction-of-p (sub parent)
+(defun e--subinstruction-of-p (sub parent)
   "Return t is instruction SUB is contained entirely within instruction PARENT.
 
 In this case, an instruction is _not_ considered a subinstruction of itself."
@@ -1438,32 +1442,32 @@ In this case, an instruction is _not_ considered a subinstruction of itself."
        (and (/= (overlay-start parent) (overlay-start sub))
             (/= (overlay-end parent) (overlay-end sub)))))
 
-(cl:defun e::child-instructions (instruction)
+(cl-defun e--child-instructions (instruction)
   "Return the direct child instructions of the given INSTRUCTION overlay."
   ;; Bodyless instructions cannot have any children.
-  (when (e::bodyless-instruction-p instruction)
-    (cl:return-from e::child-instructions nil))
-  (let ((children (cl:remove-if (lambda (instr)
+  (when (e--bodyless-instruction-p instruction)
+    (cl-return-from e--child-instructions nil))
+  (let ((children (cl-remove-if (lambda (instr)
                                   (or (eq instr instruction)
                                       (and (= (overlay-start instr) (overlay-start instruction))
                                            (= (overlay-end instr) (overlay-end instruction)))))
-                                (e::wholly-contained-instructions (overlay-buffer instruction)
+                                (e--wholly-contained-instructions (overlay-buffer instruction)
                                                                   (overlay-start instruction)
                                                                   (overlay-end instruction)))))
     (dolist (child children)
-      (setq children (cl:set-difference children
-                                        (e::child-instructions child))))
+      (setq children (cl-set-difference children
+                                        (e--child-instructions child))))
     children))
 
-(defun e::create-reference-in (buffer start end)
+(defun e--create-reference-in (buffer start end)
   "Create a region reference from START to END in BUFFER."
-  (let ((ov (e::create-instruction-overlay-in buffer start end)))
-    (overlay-put ov 'e:instruction-type 'reference)
+  (let ((ov (e--create-instruction-overlay-in buffer start end)))
+    (overlay-put ov 'e-instruction-type 'reference)
     (overlay-put ov 'evaporate t)
-    (e::update-instruction-overlay ov t)
+    (e--update-instruction-overlay ov t)
     ov))
 
-(defun e::create-directive-in (buffer start end &optional bodyless directive-text)
+(defun e--create-directive-in (buffer start end &optional bodyless directive-text)
   "Create a region directive from START to END in BUFFER.
 
 This function switches to another buffer midway of execution.
@@ -1471,18 +1475,18 @@ BODYLESS controls special formatting if non-nil.
 
 DIRECTIVE-TEXT is used as the default directive.  Having DIRECTIVE-TEXT be
 non-nil prevents the opening of a prompt buffer."
-  (let ((ov (e::create-instruction-overlay-in buffer start end)))
+  (let ((ov (e--create-instruction-overlay-in buffer start end)))
     (unless bodyless
       (overlay-put ov 'evaporate t))
-    (overlay-put ov 'e:instruction-type 'directive)
-    (overlay-put ov 'e:directive (or directive-text ""))
-    (e::update-instruction-overlay ov (not bodyless))
+    (overlay-put ov 'e-instruction-type 'directive)
+    (overlay-put ov 'e-directive (or directive-text ""))
+    (e--update-instruction-overlay ov (not bodyless))
     (unless directive-text
       (deactivate-mark)
-      (e::read-directive ov))
+      (e--read-directive ov))
     ov))
 
-(defun e::delete-instruction (instruction &optional buffer)
+(defun e--delete-instruction (instruction &optional buffer)
   "Delete the INSTRUCTION overlay and return it.
 
 If the overlay is already dead, just perform the cleanup.
@@ -1491,35 +1495,35 @@ BUFFER is required in order to perform cleanup on a dead instruction."
   ;; i.e. when the function was invoked on an existing instruction.  The second way is for when the
   ;; instruction was deleted uncanonically through text manipulation.  In the latter case, the
   ;; function will be called during a cleanup routine and the instruction will not be alive.
-  (when (overlay-get instruction 'e:marked-for-deletion)
+  (when (overlay-get instruction 'e-marked-for-deletion)
     (error "Instruction %s already marked for deletion" instruction))
-  (overlay-put instruction 'e:marked-for-deletion t)
-  (cl:labels ((cleanup (instr buffer)
-                (let ((id (e::instruction-id instr)))
-                  (e::retire-id id)
-                  (e:unlink-instructions `(,id) (e::instruction-outlinks instr))
-                  (e:unlink-instructions (e::instruction-inlinks instr) `(,id)))
-                (setf (cdr (assoc buffer e::instructions))
-                      (delq instr (cdr (assoc buffer e::instructions))))))
+  (overlay-put instruction 'e-marked-for-deletion t)
+  (cl-labels ((cleanup (instr buffer)
+                (let ((id (e--instruction-id instr)))
+                  (e--retire-id id)
+                  (e-unlink-instructions `(,id) (e--instruction-outlinks instr))
+                  (e-unlink-instructions (e--instruction-inlinks instr) `(,id)))
+                (setf (cdr (assoc buffer e--instructions))
+                      (delq instr (cdr (assoc buffer e--instructions))))))
     (let ((ov-buffer (overlay-buffer instruction)))
       (when (buffer-live-p ov-buffer)
-        (let ((children (e::child-instructions instruction)))
+        (let ((children (e--child-instructions instruction)))
           (delete-overlay instruction)
           (dolist (child children)
-            (e::update-instruction-overlay child t))))
+            (e--update-instruction-overlay child t))))
       (cleanup instruction (or ov-buffer
                                buffer
                                (error "Cannot perform cleanup without a buffer")))))
   instruction)
 
-(defun e::pos-bol-p (pos buffer)
+(defun e--pos-bol-p (pos buffer)
   "Return nil if POS is not a beginning of a line in BUFFER."
   (with-current-buffer buffer
     (save-excursion
       (goto-char pos)
       (= pos (pos-bol)))))
 
-(defun e::fill-label-string (string &optional prefix-string padding buffer)
+(defun e--fill-label-string (string &optional prefix-string padding buffer)
   "Fill STRING into its label.
 
 If PREFIX-STRING is not nil, whitespace padding is added at the start of
@@ -1531,8 +1535,8 @@ If BUFFER is provided, STRING will be wrapped to not overflow the fill column
 of BUFFER.  Wrapping will attempt to respect word boundaries and only hyphenate
 words as a last resort if a word is too long to fit on a line by itself."
   (let* ((paragraph-padding (if prefix-string
-                      (make-string (length prefix-string) ? )
-                    ""))
+                                (make-string (length prefix-string) ? )
+                              ""))
          (padding-fill-column (if buffer
                                   (- (with-current-buffer buffer
                                        fill-column)
@@ -1585,13 +1589,13 @@ words as a last resort if a word is too long to fit on a line by itself."
         (forward-line))
       (string-trim (buffer-string)))))
 
-(defun e::instructions-congruent-p (a b)
-  "Returns t only if instruction overlays A and B are congruent."
+(defun e--instructions-congruent-p (a b)
+  "Return t only if instruction overlays A and B are congruent."
   (and (eq (overlay-buffer a) (overlay-buffer b))
        (= (overlay-start a) (overlay-start b))
        (= (overlay-end a) (overlay-end b))))
 
-(defun e::apply-face-to-match (regex string face)
+(defun e--apply-face-to-match (regex string face)
   "Apply FACE as a text property to the REGEX match in STRING.
 
 If FACE is nil, removes the face property from the REGEX match in STRING."
@@ -1604,7 +1608,7 @@ If FACE is nil, removes the face property from the REGEX match in STRING."
         (remove-text-properties (match-beginning 0) (match-end 0) '(face nil))))
     (buffer-string)))
 
-(defun e::instruction-bufferlevel-p (instruction)
+(defun e--instruction-bufferlevel-p (instruction)
   "Return t if INSTRUCTION contains the entirety of its buffer."
   (let ((buffer (overlay-buffer instruction)))
     (when buffer
@@ -1612,7 +1616,7 @@ If FACE is nil, removes the face property from the REGEX match in STRING."
         (and (= (overlay-start instruction) (point-min))
              (= (overlay-end instruction) (point-max)))))))
 
-(defun e::update-instruction-overlay (instruction &optional update-children)
+(defun e--update-instruction-overlay (instruction &optional update-children)
   "Update the appearance of the INSTRUCTION overlay.
 
 This function updates the overlay label text, color of the label text, and the
@@ -1622,53 +1626,53 @@ wish to reflect.
 
 Also updates the child instructions of the INSTRUCTION, if UPDATE-CHILDREN is
 non-nil."
-  (cl:labels
+  (cl-labels
       ((directive-color (directive)
-         (cl:labels ((dircol ()
-                       (pcase (overlay-get directive 'e:directive-status)
-                         ('processing e:directive-processing-color)
-                         ('succeeded  e:directive-success-color)
-                         ('failed     e:directive-fail-color)
-                         (_           e:directive-color))))
-           (if-let ((parent-directive (e::parent-instruction directive 'directive)))
-               (if (eq (overlay-get parent-directive 'e:directive-status) 'processing)
-                   e:directive-processing-color
+         (cl-labels ((dircol ()
+                       (pcase (overlay-get directive 'e-directive-status)
+                         ('processing e-directive-processing-color)
+                         ('succeeded  e-directive-success-color)
+                         ('failed     e-directive-fail-color)
+                         (_           e-directive-color))))
+           (if-let ((parent-directive (e--parent-instruction directive 'directive)))
+               (if (eq (overlay-get parent-directive 'e-directive-status) 'processing)
+                   e-directive-processing-color
                  (dircol))
              (dircol))))
        (aux (instruction &optional update-children priority (parent nil))
-         (let* ((instruction-type (e::instruction-type instruction))
+         (let* ((instruction-type (e--instruction-type instruction))
                 (padding (with-current-buffer (overlay-buffer instruction)
                            (save-excursion
                              (goto-char (overlay-start instruction))
                              (make-string (current-column) ? ))))
-                (is-bufferlevel (e::instruction-bufferlevel-p instruction))
-                (parent-bufferlevel (and parent (e::instruction-bufferlevel-p parent)))
+                (is-bufferlevel (e--instruction-bufferlevel-p instruction))
+                (parent-bufferlevel (and parent (e--instruction-bufferlevel-p parent)))
                 ;; This is to prevent the buffer-level instruction from having a background color.
                 (priority (if is-bufferlevel (1- priority) priority))
                 (label "")
                 color)
-           (cl:labels
+           (cl-labels
                ((append-to-label (content &optional prefix)
                   (setq label
                         (concat label
                                 (if (string-empty-p label) "" (concat "\n" padding))
-                                (e::fill-label-string content
+                                (e--fill-label-string content
                                                       (or prefix "")
                                                       padding
                                                       (overlay-buffer instruction)))))
                 (stylized-id-str (id)
                   (propertize (format "#%d" id) 'face 'font-lock-constant-face))
                 (append-links-to-label ()
-                  (cl:labels ((filter-ids (ids)
-                                (cl:loop for id in ids
+                  (cl-labels ((filter-ids (ids)
+                                (cl-loop for id in ids
                                          unless
-                                         (let ((instr (e::instruction-with-id id)))
+                                         (let ((instr (e--instruction-with-id id)))
                                            (or (null instr)
-                                               (not (eq (e::instruction-type instr)
+                                               (not (eq (e--instruction-type instr)
                                                         instruction-type))))
                                          collect id)))
-                    (let ((outlinks (filter-ids (e::instruction-outlinks instruction)))
-                          (inlinks (filter-ids (e::instruction-inlinks instruction))))
+                    (let ((outlinks (filter-ids (e--instruction-outlinks instruction)))
+                          (inlinks (filter-ids (e--instruction-inlinks instruction))))
                       (when (or outlinks inlinks)
                         (let ((prefix (format "%s LINKS: "
                                               (if (eq instruction-type instruction)
@@ -1691,22 +1695,22 @@ non-nil."
                                            prefix)))))))
              (pcase instruction-type
                ('reference ; REFERENCE
-                (setq color e:reference-color)
+                (setq color e-reference-color)
                 (if (and parent
-                         (and (eq (e::instruction-type parent) 'reference)
+                         (and (eq (e--instruction-type parent) 'reference)
                               (not parent-bufferlevel)))
                     (append-to-label (format "SUBREFERENCE %s"
-                                             (stylized-id-str (e::instruction-id instruction))))
+                                             (stylized-id-str (e--instruction-id instruction))))
                   (if is-bufferlevel
                       (append-to-label (format "BUFFER REFERENCE %s"
-                                               (stylized-id-str (e::instruction-id instruction))))
+                                               (stylized-id-str (e--instruction-id instruction))))
                     (append-to-label (format "REFERENCE %s"
-                                             (stylized-id-str (e::instruction-id instruction))))))
-                (let* ((direct-tags (e::reference-tags instruction))
-                       (inherited-tags (e::inherited-tags instruction))
-                       (common-tags (cl:intersection inherited-tags direct-tags))
-                       (unique-tags (cl:set-difference direct-tags common-tags)))
-                  (cl:labels
+                                             (stylized-id-str (e--instruction-id instruction))))))
+                (let* ((direct-tags (e--reference-tags instruction))
+                       (inherited-tags (e--inherited-tags instruction))
+                       (common-tags (cl-intersection inherited-tags direct-tags))
+                       (unique-tags (cl-set-difference direct-tags common-tags)))
+                  (cl-labels
                       ((propertized-string-from-tags (tags)
                          (string-join
                           (mapcar (lambda (tag)
@@ -1732,31 +1736,31 @@ non-nil."
                                              "DIRECT TAGS: ")
                                          "TAGS: ")))))
                 (append-links-to-label)
-                (let ((commentary (string-trim (or (e::commentary-text instruction)
+                (let ((commentary (string-trim (or (e--commentary-text instruction)
                                                    ""))))
                   (unless (string-empty-p commentary)
                     (append-to-label commentary "COMMENTARY: "))))
                ('directive ; DIRECTIVE
-                (pcase (overlay-get instruction 'e:directive-status)
+                (pcase (overlay-get instruction 'e-directive-status)
                   ('processing (append-to-label "PROCESSING"))
                   ('succeeded (append-to-label "SUCCEEDED"))
                   ('failed (append-to-label (overlay-get instruction
-                                                         'e:directive-fail-reason)
+                                                         'e-directive-fail-reason)
                                             "FAILED: ")))
                 (setq color (directive-color instruction))
                 (let (sublabel
                       (directive-typename "DIRECTIVE"))
                   (if (and parent
-                           (e::directivep parent))
-                      (if (overlay-get parent 'e:directive-status)
+                           (e--directivep parent))
+                      (if (overlay-get parent 'e-directive-status)
                           (setq directive-typename "CORRECTION")
                         (setq directive-typename "DIRECTIVE HINT")))
                   (setq sublabel (concat
                                   sublabel
                                   (format "%s %s"
                                           directive-typename
-                                          (stylized-id-str (e::instruction-id instruction)))))
-                  (let ((directive (string-trim (or (overlay-get instruction 'e:directive)
+                                          (stylized-id-str (e--instruction-id instruction)))))
+                  (let ((directive (string-trim (or (overlay-get instruction 'e-directive)
                                                     ""))))
                     (if (string-empty-p directive)
                         (setq sublabel (concat "EMPTY " sublabel))
@@ -1765,18 +1769,18 @@ non-nil."
                                  label
                                  (unless (string-empty-p label)
                                    (concat "\n" padding))
-                                 (e::fill-label-string directive
+                                 (e--fill-label-string directive
                                                        sublabel
                                                        padding
                                                        (overlay-buffer instruction))))
-                    (unless (e::parent-instruction instruction 'directive)
+                    (unless (e--parent-instruction instruction 'directive)
                       (if-let ((query-string (overlay-get instruction
-                                                          'e:directive-infix-tag-query-string)))
+                                                          'e-directive-infix-tag-query-string)))
                           (append-to-label query-string "TAG QUERY: ")
                         (let (matchinfo)
-                          (if e:empty-tag-query-matches-all
+                          (if e-empty-tag-query-matches-all
                               (setq matchinfo "REFERENCES ALL")
-                            (if e:always-match-untagged-references
+                            (if e-always-match-untagged-references
                                 (setq matchinfo "REFERENCES UNTAGGED ONLY")
                               (setq matchinfo "REFERENCES NOTHING")))
                           (setq label (concat label "\n" padding matchinfo))))
@@ -1785,46 +1789,46 @@ non-nil."
                     (default-bg (face-background 'default))
                     (bg-tint-intensity
                      (if (and parent (not parent-bufferlevel))
-                         (* e:subinstruction-tint-coefficient e:instruction-bg-tint-intensity)
-                       e:instruction-bg-tint-intensity))
+                         (* e-subinstruction-tint-coefficient e-instruction-bg-tint-intensity)
+                       e-instruction-bg-tint-intensity))
                     (label-color (if is-bufferlevel
-                                     (e::tint default-fg color e:instruction-label-tint-intensity)
-                                   (let ((tint (e::tint default-fg
+                                     (e--tint default-fg color e-instruction-label-tint-intensity)
+                                   (let ((tint (e--tint default-fg
                                                         color
-                                                        e:instruction-label-tint-intensity)))
+                                                        e-instruction-label-tint-intensity)))
                                      (dotimes (_  (- priority
-                                                     e::default-instruction-priority))
-                                       (setq tint (e::tint tint
+                                                     e--default-instruction-priority))
+                                       (setq tint (e--tint tint
                                                            color
-                                                           e:instruction-label-tint-intensity)))
+                                                           e-instruction-label-tint-intensity)))
                                      tint)))
                     ;; We want to make sure that the buffer-level instructions don't superfluously
                     ;; tint the background.
                     (bg-color (if (and is-bufferlevel (eq instruction-type 'reference))
                                   default-bg
-                                (let ((tint (e::tint default-bg
+                                (let ((tint (e--tint default-bg
                                                      color
-                                                     e:instruction-bg-tint-intensity)))
+                                                     e-instruction-bg-tint-intensity)))
                                   (dotimes (_ (- priority
-                                                 e::default-instruction-priority))
-                                    (setq tint (e::tint tint color bg-tint-intensity)))
+                                                 e--default-instruction-priority))
+                                    (setq tint (e--tint tint color bg-tint-intensity)))
                                   tint))))
-               (overlay-put instruction 'e:bg-color bg-color)
-               (overlay-put instruction 'e:label-color label-color)
+               (overlay-put instruction 'e-bg-color bg-color)
+               (overlay-put instruction 'e-label-color label-color)
                (overlay-put instruction 'priority priority)
                (when (eq instruction
-                         e::highlighted-instruction)
+                         e--highlighted-instruction)
                  (setq bg-color
-                       (e::tint default-bg
-                                e:highlighted-instruction-color
-                                e:highlighted-instruction-tint-intensity)))
+                       (e--tint default-bg
+                                e-highlighted-instruction-color
+                                e-highlighted-instruction-tint-intensity)))
                (let ((instruction-is-at-eol (with-current-buffer (overlay-buffer instruction)
                                               (save-excursion
                                                 (goto-char (overlay-end instruction))
-                                                (= (point) (pos-eol))))))
+                                                (eolp)))))
                  ;; Propertize specific parts of the before-string of the label, to give
                  ;; the illusion that its a "sticker" in the buffer.
-                 (cl:labels
+                 (cl-labels
                      ((colorize-region (beg end &optional fg bg)
                         (unless (= beg end)
                           (let ((fg (or fg label-color))
@@ -1836,14 +1840,14 @@ non-nil."
                                                           :background bg)
                                                     t))))
                       (colorize-region-as-parent (beg end)
-                        (when-let ((parent (e::parent-instruction instruction)))
+                        (when-let ((parent (e--parent-instruction instruction)))
                           (colorize-region beg end
-                                           (overlay-get parent 'e:label-color)
-                                           (overlay-get parent 'e:bg-color)))))
+                                           (overlay-get parent 'e-label-color)
+                                           (overlay-get parent 'e-bg-color)))))
                    (let ((before-string
                           (with-temp-buffer
                             (insert label)
-                            (if (e::bodyless-instruction-p instruction)
+                            (if (e--bodyless-instruction-p instruction)
                                 (unless instruction-is-at-eol
                                   (insert "\n"))
                               (insert "\n"))
@@ -1868,7 +1872,7 @@ non-nil."
                                   (colorize-region mark (point)))
                                 (unless went-to-next-line
                                   (forward-line))))
-                            (unless (e::bodyless-instruction-p instruction)
+                            (unless (e--bodyless-instruction-p instruction)
                               (let ((mark (point)))
                                 (insert padding)
                                 (colorize-region-as-parent mark (point))))
@@ -1876,23 +1880,23 @@ non-nil."
                      (overlay-put instruction 'before-string before-string))))
                (overlay-put instruction 'face `(:extend t :background ,bg-color)))
              (when update-children
-               (dolist (child (e::child-instructions instruction))
+               (dolist (child (e--child-instructions instruction))
                  (aux child update-children (1+ priority) instruction)))))))
-    (let ((instructions-conflicting (cl:some (lambda (instr)
+    (let ((instructions-conflicting (cl-some (lambda (instr)
                                                (and (not (eq instr instruction))
-                                                    (e::instructions-congruent-p instruction
+                                                    (e--instructions-congruent-p instruction
                                                                                  instr)))
-                                             (e::instructions-at (overlay-start instruction)))))
+                                             (e--instructions-at (overlay-start instruction)))))
       (if instructions-conflicting
           ;; This instruction is causing conflicts, and therefore must be deleted.
-          (e::delete-instruction instruction)
-        (let ((parent (e::parent-instruction instruction)))
+          (e--delete-instruction instruction)
+        (let ((parent (e--parent-instruction instruction)))
           (let ((priority (if parent
                               (1+ (overlay-get parent 'priority))
-                            e::default-instruction-priority)))
+                            e--default-instruction-priority)))
             (aux instruction update-children priority parent)))))))
 
-(defun e::restore-overlay (buffer overlay-start overlay-end properties)
+(defun e--restore-overlay (buffer overlay-start overlay-end properties)
   "Helper function to restore an instruction overlay in BUFFER.
 
 Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
@@ -1902,65 +1906,65 @@ Uses PROPERTIES, OVERLAY-START, and OVERLAY-END to recreate the overlay."
           properties)
     new-ov))
 
-(defun e::file-outdated-p (file)
+(defun e--file-outdated-p (file)
   "Determine whether or not FILE needs patching.
 
 A file being outdated refers to the file in the instructions alist not being
 up-to-date, not the actual file on the disk being outdated."
   (when (file-exists-p file)
-    (when-let ((file-plist (cdr (assoc file e::instructions))))
-      (let ((e::inhibit-file-restoration t))
+    (when-let ((file-plist (cdr (assoc file e--instructions))))
+      (let ((e--inhibit-file-restoration t))
         (let ((original-content (plist-get file-plist :original-content))
               (buffer (find-file-noselect file)))
           (with-current-buffer buffer
             (not (string= original-content
                           (buffer-substring-no-properties (point-min) (point-max))))))))))
 
-(defun e::setup-buffer-hooks (buffer)
+(defun e--setup-buffer-hooks (buffer)
   (with-current-buffer buffer
-    (unless (bound-and-true-p e::buffer-hooks-setup)
+    (unless (bound-and-true-p e--buffer-hooks-setup)
       (add-hook 'kill-buffer-hook
                 (lambda ()
-                  (when (e::buffer-has-instructions-p (current-buffer))
+                  (when (e--buffer-has-instructions-p (current-buffer))
                     (when-let ((file (buffer-file-name buffer)))
                       (if (file-exists-p file)
-                        (let ((file-contents
-                               (with-temp-buffer
-                                 (insert-file-contents file)
-                                 (buffer-substring-no-properties (point-min) (point-max)))))
-                          (e::stash-buffer buffer file-contents))
-                        (setq e::instructions (assq-delete-all buffer e::instructions))))))
-                  nil t))
-      (add-hook 'before-revert-hook
-                (lambda ()
-                  (when (e::buffer-has-instructions-p buffer)
-                    (e::stash-buffer buffer)
-                    (setq-local e::buffer-instructions-reverted t)))
-                nil t)
-      (add-hook 'after-revert-hook
-                (lambda ()
-                  (when (bound-and-true-p e::buffer-instructions-reverted)
-                    (e::restore-file-instructions (buffer-file-name buffer) t)
-                    (setq-local e::buffer-instructions-reverted nil)))
-                nil t)
-      (setq-local e::buffer-hooks-setup t)))
+                          (let ((file-contents
+                                 (with-temp-buffer
+                                   (insert-file-contents file)
+                                   (buffer-substring-no-properties (point-min) (point-max)))))
+                            (e--stash-buffer buffer file-contents))
+                        (setq e--instructions (assq-delete-all buffer e--instructions))))))
+                nil t))
+    (add-hook 'before-revert-hook
+              (lambda ()
+                (when (e--buffer-has-instructions-p buffer)
+                  (e--stash-buffer buffer)
+                  (setq-local e--buffer-instructions-reverted t)))
+              nil t)
+    (add-hook 'after-revert-hook
+              (lambda ()
+                (when (bound-and-true-p e--buffer-instructions-reverted)
+                  (e--restore-file-instructions (buffer-file-name buffer) t)
+                  (setq-local e--buffer-instructions-reverted nil)))
+              nil t)
+    (setq-local e--buffer-hooks-setup t)))
 
-(defun e::buffer-has-instructions-p (buffer)
-  (assoc buffer e::instructions))
+(defun e--buffer-has-instructions-p (buffer)
+  (assoc buffer e--instructions))
 
-(cl:defun e::restore-file-instructions (file &optional message)
+(cl-defun e--restore-file-instructions (file &optional message)
   "Restore FILE and its INSTRUCTIONS.
 
 Returns two values: the amount of instructions restored and the amount of
 instructions lost to the patching process, if any.
 
 If MESSAGE is non-nil, message the intent of patching outdated files."
-  (let ((e::inhibit-file-restoration t))
+  (let ((e--inhibit-file-restoration t))
     (unless (and (file-exists-p file)
-                 (assoc file e::instructions))
-      (cl:return-from e::restore-file-instructions (cl:values 0 0)))
-    (cl:destructuring-bind (&key original-content instructions) (alist-get file
-                                                                           e::instructions
+                 (assoc file e--instructions))
+      (cl-return-from e--restore-file-instructions (cl-values 0 0)))
+    (cl-destructuring-bind (&key original-content instructions) (alist-get file
+                                                                           e--instructions
                                                                            nil
                                                                            nil
                                                                            #'equal)
@@ -1971,30 +1975,30 @@ If MESSAGE is non-nil, message the intent of patching outdated files."
             (restored 0)
             (kia 0))
         (with-current-buffer buffer
-          (e::setup-buffer-hooks buffer)
-          (cl:labels ((restore-overlays (dstbuf instr-maybe-plists)
+          (e--setup-buffer-hooks buffer)
+          (cl-labels ((restore-overlays (dstbuf instr-maybe-plists)
                         (let ((ovs ()))
                           (dolist (instr instr-maybe-plists)
                             (if (plist-get instr :overlay-start)
-                              (cl:destructuring-bind (&key overlay-start overlay-end properties)
-                                  instr
-                                (push (e::restore-overlay dstbuf
-                                                          overlay-start
-                                                          overlay-end
-                                                          properties)
-                                      ovs))
-                              (push (e::restore-overlay dstbuf
+                                (cl-destructuring-bind (&key overlay-start overlay-end properties)
+                                    instr
+                                  (push (e--restore-overlay dstbuf
+                                                            overlay-start
+                                                            overlay-end
+                                                            properties)
+                                        ovs))
+                              (push (e--restore-overlay dstbuf
                                                         (overlay-start instr)
                                                         (overlay-end instr)
                                                         (overlay-properties instr))
                                     ovs)))
                           ovs)))
-            (if (and e:patch-outdated-instructions
-                     (e::file-outdated-p file))
+            (if (and e-patch-outdated-instructions
+                     (e--file-outdated-p file))
                 (if (not (executable-find "diff"))
                     (progn
                       (warn "Patching outdated instructions requires 'diff' to be installed.")
-                      (setq e:patch-outdated-instructions nil)
+                      (setq e-patch-outdated-instructions nil)
                       (restore-overlays buffer instructions))
                   (when message
                     (message "Patching outdated instructions in buffer '%s'..."
@@ -2005,69 +2009,69 @@ If MESSAGE is non-nil, message the intent of patching outdated files."
                       (with-temp-buffer
                         (insert original-content)
                         (restore-overlays (current-buffer) instructions)
-                        (e::wordwise-diff-patch-buffers (current-buffer) new-buffer)
-                        (restore-overlays buffer (e::instructions-in (point-min) (point-max)))))))
+                        (e--wordwise-diff-patch-buffers (current-buffer) new-buffer)
+                        (restore-overlays buffer (e--instructions-in (point-min) (point-max)))))))
               (restore-overlays buffer instructions)))
-          (let ((restored-instrs (e::instructions-in (point-min) (point-max))))
+          (let ((restored-instrs (e--instructions-in (point-min) (point-max))))
             (setq restored (length restored-instrs)
                   kia (- (length instructions) restored))
-            (setf (alist-get file e::instructions nil nil #'equal) restored-instrs)))
-        (setf (car (assoc file e::instructions)) buffer)
-        (cl:values restored kia)))))
+            (setf (alist-get file e--instructions nil nil #'equal) restored-instrs)))
+        (setf (car (assoc file e--instructions)) buffer)
+        (cl-values restored kia)))))
 
-(defun e::wholly-contained-instructions (buffer start end)
+(defun e--wholly-contained-instructions (buffer start end)
   "Return Evedel overlays in BUFFER that are entirely within START and END."
   (with-current-buffer buffer
-    (cl:remove-if-not (lambda (ov)
-                        (and (overlay-get ov 'e:instruction)
+    (cl-remove-if-not (lambda (ov)
+                        (and (overlay-get ov 'e-instruction)
                              (>= (overlay-start ov) start)
                              (<= (overlay-end ov) end)))
                       (overlays-in start end))))
 
-(defun e::instructions-at (point &optional type)
+(defun e--instructions-at (point &optional type)
   "Return a list of instructions at current POINT.
 
 Optionally return only instructions of specific TYPE.
 Also returns bodyless overlays located right before the point."
-  (cl:remove-if-not (lambda (ov)
-                      (and (overlay-get ov 'e:instruction)
+  (cl-remove-if-not (lambda (ov)
+                      (and (overlay-get ov 'e-instruction)
                            (or (and type
-                                    (eq (overlay-get ov 'e:instruction-type)
+                                    (eq (overlay-get ov 'e-instruction-type)
                                         type))
                                (null type))))
                     (overlays-in point
                                  (min (point-max) (1+ point)))))
 
-(defun e::instructions-in (start end &optional type)
+(defun e--instructions-in (start end &optional type)
   "Return a list of instructions in region delimited by START and END.
 
 Optionally return only instructions of specific TYPE."
-  (cl:remove-if-not (lambda (ov)
-                      (and (overlay-get ov 'e:instruction)
+  (cl-remove-if-not (lambda (ov)
+                      (and (overlay-get ov 'e-instruction)
                            (or (and type
-                                    (eq (overlay-get ov 'e:instruction-type)
+                                    (eq (overlay-get ov 'e-instruction-type)
                                         type))
                                (null type))))
                     (overlays-in start end)))
 
-(defun e::partially-contained-instructions (buffer start end)
+(defun e--partially-contained-instructions (buffer start end)
   "Return instructions in BUFFER that overlap with START and END.
 
 Does not return instructions that contain the region in its entirety."
   (with-current-buffer buffer
-    (cl:remove-if-not (lambda (ov)
-                        (and (overlay-get ov 'e:instruction)
+    (cl-remove-if-not (lambda (ov)
+                        (and (overlay-get ov 'e-instruction)
                              (or (<= (overlay-start ov) start)
                                  (>= (overlay-end ov) end))
                              (not (and (<= (overlay-start ov) start)
                                        (>= (overlay-end ov) end)))))
                       (overlays-in start end))))
 
-(defun e::instructions ()
+(defun e--instructions ()
   "Return a list of all currently loaded instructions."
-  (e::foreach-instruction inst collect inst))
+  (e--foreach-instruction inst collect inst))
 
-(cl:defun e::topmost-instruction (instruction &optional of-type pred)
+(cl-defun e--topmost-instruction (instruction &optional of-type pred)
   "Return the topmost instruction containing the INSTRUCTION, if any.
 
 If OF-TYPE is non-nil, filter by the specified instruction OF-TYPE.
@@ -2076,110 +2080,110 @@ If OF-TYPE is nil, the instruction returned is the top-level one.
 If PRED is non-nil, then the best instruction must also satisfy it.
 The PRED must be a function which accepts an instruction."
   (unless instruction
-    (cl:return-from e::topmost-instruction nil))
+    (cl-return-from e--topmost-instruction nil))
   (with-current-buffer (overlay-buffer instruction)
     (let ((best-instruction instruction))
-      (cl:labels ((parent-instr (instr)
-                    (if-let ((parent (e::parent-instruction instr)))
+      (cl-labels ((parent-instr (instr)
+                    (if-let ((parent (e--parent-instruction instr)))
                         (progn
-                          (when (and (or (null of-type) (eq of-type (e::instruction-type parent)))
+                          (when (and (or (null of-type) (eq of-type (e--instruction-type parent)))
                                      (or (null pred) (funcall pred parent)))
                             (setq best-instruction parent))
                           (parent-instr parent))
                       best-instruction)))
         (setq best-instruction (parent-instr instruction)))
-      (if (and (or (null of-type) (eq of-type (e::instruction-type best-instruction)))
+      (if (and (or (null of-type) (eq of-type (e--instruction-type best-instruction)))
                (or (null pred) (funcall pred best-instruction)))
           best-instruction
         nil))))
 
-(defun e::toplevel-instructions (&optional of-type)
+(defun e--toplevel-instructions (&optional of-type)
   "Return the global top-level instructions across all buffers.
 
 Returns only instructions of specific type if OF-TYPE is non-nil.
 If OF-TYPE is non-nil, this function does _not_ return the \"next best\"
 instruction of the matching type; i.e., the returned list consists only of
 toplevel instructions that also match the specified type."
-  (e::foreach-instruction instr
-    with toplevels = (make-hash-table)
-    with inferiors = (make-hash-table)
-    unless (or (gethash instr toplevels) (gethash instr inferiors))
-    do (with-current-buffer (overlay-buffer instr)
-         (let* ((instrs (e::instructions-at (overlay-start instr)))
-                (topmost (car (cl:remove-if #'e::parent-instruction instrs)))
-                (children (delq topmost instrs)))
-           (puthash topmost t toplevels)
-           (cl:loop for child in children do (puthash child t inferiors))))
-    finally (cl:return (if of-type
-                           (cl:remove-if-not (lambda (instr)
-                                               (eq (e::instruction-type instr) of-type))
-                                             (hash-table-keys toplevels))
-                         (hash-table-keys toplevels)))))
+  (e--foreach-instruction instr
+                          with toplevels = (make-hash-table)
+                          with inferiors = (make-hash-table)
+                          unless (or (gethash instr toplevels) (gethash instr inferiors))
+                          do (with-current-buffer (overlay-buffer instr)
+                               (let* ((instrs (e--instructions-at (overlay-start instr)))
+                                      (topmost (car (cl-remove-if #'e--parent-instruction instrs)))
+                                      (children (delq topmost instrs)))
+                                 (puthash topmost t toplevels)
+                                 (cl-loop for child in children do (puthash child t inferiors))))
+                          finally (cl-return (if of-type
+                                                 (cl-remove-if-not (lambda (instr)
+                                                                     (eq (e--instruction-type instr) of-type))
+                                                                   (hash-table-keys toplevels))
+                                               (hash-table-keys toplevels)))))
 
-(defun e::directive-text (directive)
+(defun e--directive-text (directive)
   "Return the directive text of the DIRECTIVE overlay.
 
 Returns an empty string if there is no directive text."
-  (or (overlay-get directive 'e:directive) ""))
+  (or (overlay-get directive 'e-directive) ""))
 
-(defun e::commentary-text (reference)
+(defun e--commentary-text (reference)
   "Return the commentary text of the REFERENCE overlay.
 
 Returns an empty string if there is no commentary."
-  (or (overlay-get reference 'e:commentary) ""))
+  (or (overlay-get reference 'e-commentary) ""))
 
-(defun e::read-directive (directive)
+(defun e--read-directive (directive)
   "Prompt user to enter a directive text via minibuffer for DIRECTIVE."
-  (let ((original-directive-text (e::directive-text directive))
-        (original-directive-status (overlay-get directive 'e:directive-status)))
+  (let ((original-directive-text (e--directive-text directive))
+        (original-directive-status (overlay-get directive 'e-directive-status)))
     (minibuffer-with-setup-hook
         (lambda ()
           (add-hook 'minibuffer-exit-hook
                     (lambda ()
                       (let ((directive-text (minibuffer-contents)))
-                        (overlay-put directive 'e:directive directive-text)
-                        (e::update-instruction-overlay directive)))
+                        (overlay-put directive 'e-directive directive-text)
+                        (e--update-instruction-overlay directive)))
                     nil t)
           (add-hook 'after-change-functions
                     (lambda (_beg _end _len)
-                      (overlay-put directive 'e:directive (minibuffer-contents))
-                      (overlay-put directive 'e:directive-status nil)
-                      (e::update-instruction-overlay directive))
+                      (overlay-put directive 'e-directive (minibuffer-contents))
+                      (overlay-put directive 'e-directive-status nil)
+                      (e--update-instruction-overlay directive))
                     nil t))
       (condition-case _err
           (read-from-minibuffer "Directive: " original-directive-text)
         (quit
          (if (string-empty-p original-directive-text)
-             (e::delete-instruction directive)
-           (overlay-put directive 'e:directive original-directive-text)
-           (overlay-put directive 'e:directive-status original-directive-status)
-           (e::update-instruction-overlay directive nil))
+             (e--delete-instruction directive)
+           (overlay-put directive 'e-directive original-directive-text)
+           (overlay-put directive 'e-directive-status original-directive-status)
+           (e--update-instruction-overlay directive nil))
          (signal 'quit nil))))))
 
-(defun e::read-commentary (reference)
+(defun e--read-commentary (reference)
   "Prompt user to enter a commentary text via minibuffer for REFERENCE."
-  (let ((original-commentary-text (e::commentary-text reference)))
+  (let ((original-commentary-text (e--commentary-text reference)))
     (minibuffer-with-setup-hook
         (lambda ()
           (add-hook 'minibuffer-exit-hook
                     (lambda ()
                       (let ((commentary-text (minibuffer-contents)))
-                        (overlay-put reference 'e:commentary commentary-text)
-                        (e::update-instruction-overlay reference)))
+                        (overlay-put reference 'e-commentary commentary-text)
+                        (e--update-instruction-overlay reference)))
                     nil t)
           (add-hook 'after-change-functions
                     (lambda (_beg _end _len)
-                      (overlay-put reference 'e:commentary (minibuffer-contents))
-                      (e::update-instruction-overlay reference))
+                      (overlay-put reference 'e-commentary (minibuffer-contents))
+                      (e--update-instruction-overlay reference))
                     nil t))
       (condition-case _err
           (read-from-minibuffer "Commentary: " original-commentary-text)
         (quit
-         (overlay-put reference 'e:commentary original-commentary-text)
-         (e::update-instruction-overlay reference nil))
+         (overlay-put reference 'e-commentary original-commentary-text)
+         (e--update-instruction-overlay reference nil))
         (signal 'quit nil)))))
 
-(defun e::descriptive-llm-mode-role (mode)
+(defun e--descriptive-llm-mode-role (mode)
   "Derive the descriptive major mode role name from the major MODE.
 
 Defaults to \"a helpful assistant\" if no appropriate role has been found in
@@ -2187,34 +2191,34 @@ the `evedel-descriptive-mode-roles' variable.
 
 The role will default to \"a careful programmer\" if the major mode is not
 listed in `evedel-descriptive-mode-roles' but is derivative from `prog-mode'."
-  (if-let ((role (alist-get mode e:descriptive-mode-roles)))
+  (if-let ((role (alist-get mode e-descriptive-mode-roles)))
       role
     (if (provided-mode-derived-p mode 'prog-mode)
         "a careful programmer"
       "a helpful assistant")))
 
-(defun e::directive-llm-system-message (directive)
+(defun e--directive-llm-system-message (directive)
   "Craft the system message for the LLM model associated with the DIRECTIVE.
 
 Returns the message as a string."
   (with-current-buffer (overlay-buffer directive)
-    (concat "You are " (e::descriptive-llm-mode-role major-mode) ". Follow user directive.")))
+    (concat "You are " (e--descriptive-llm-mode-role major-mode) ". Follow user directive.")))
 
-(defun e::delimiting-markdown-backticks (string)
+(defun e--delimiting-markdown-backticks (string)
   "Return a string containing the appropriate code block backticks for STRING."
   (let ((backticks "```"))
     (while (string-match-p backticks string)
       (setq backticks (concat backticks "`")))
     backticks))
 
-(defun e::overlay-region-info (overlay)
+(defun e--overlay-region-info (overlay)
   "Return region span information of OVERLAY in its buffer.
 
 Returns three values, first being the region line & column span string in the
 buffer, and the second being the content of the span itself."
   (let ((beg (overlay-start overlay))
         (end (overlay-end overlay)))
-    (cl:labels ((pos-bol-p (pos)
+    (cl-labels ((pos-bol-p (pos)
                   (save-excursion
                     (goto-char pos)
                     (bolp)))
@@ -2232,16 +2236,16 @@ buffer, and the second being the content of the span itself."
         (without-restriction
           (unless (= beg end)
             (when (pos-eol-p beg)
-              (cl:incf beg))
+              (cl-incf beg))
             (when (pos-bol-p end)
-              (cl:decf end)))
+              (cl-decf end)))
           (if (= beg end (point-min))
-              (cl:values "beginning of the buffer" "")
+              (cl-values "beginning of the buffer" "")
             (let ((beg-lineno (pos-lineno beg))
                   (end-lineno (pos-lineno end))
                   (beg-colno (pos-colno beg))
                   (end-colno (pos-colno end)))
-              (cl:values (format "line%s %s"
+              (cl-values (format "line%s %s"
                                  (if (/= beg-lineno end-lineno) "s" "")
                                  (if (/= beg-lineno end-lineno)
                                      (format "%d%s-%d%s"
@@ -2266,138 +2270,138 @@ buffer, and the second being the content of the span itself."
                                                          (format "%d" end-colno))))))))
                          (buffer-substring-no-properties beg end)))))))))
 
-(defun e::toplevel-references ()
+(defun e--toplevel-references ()
   "Fetch all toplevel reference instructions.
 
 A toplevel reference instruction is one that has no parents."
   (seq-filter (lambda (instr)
-                (and (null (e::parent-instruction instr))
-                     (e::referencep instr)))
-              (e::instructions)))
+                (and (null (e--parent-instruction instr))
+                     (e--referencep instr)))
+              (e--instructions)))
 
-(defun e::multiline-string-p (str)
+(defun e--multiline-string-p (str)
   "Check if STR contains multiple lines."
   (string-match-p "\n" str))
 
-(defun e::markdown-enquote (input-string)
+(defun e--markdown-enquote (input-string)
   "Add Markdown blockquote to each line in INPUT-STRING."
   (let ((lines (split-string input-string "\n")))
     (mapconcat (lambda (line) (concat "> " line)) lines "\n")))
 
-(cl:defun e::ancestral-instructions (instruction &optional of-type)
+(cl-defun e--ancestral-instructions (instruction &optional of-type)
   "Return a list of ancestors for the current INSTRUCTION."
-  (if-let ((parent (e::parent-instruction instruction)))
+  (if-let ((parent (e--parent-instruction instruction)))
       (if (or (null of-type)
-              (eq (e::instruction-type parent) of-type))
-          (cons parent (e::ancestral-instructions parent of-type))
-        (e::ancestral-instructions parent of-type))
+              (eq (e--instruction-type parent) of-type))
+          (cons parent (e--ancestral-instructions parent of-type))
+        (e--ancestral-instructions parent of-type))
     nil))
 
-(defun e::directive-llm-prompt (directive)
+(defun e--directive-llm-prompt (directive)
   "Craft the prompt for the LLM model associated with the DIRECTIVE.
 
 Returns the prompt as a string."
-  (when (e::directive-empty-p directive)
+  (when (e--directive-empty-p directive)
     (error "Directive %s is empty" directive))
   (let* ((is-programmer (derived-mode-p 'prog-mode))
-         (query (overlay-get directive 'e:directive-prefix-tag-query))
+         (query (overlay-get directive 'e-directive-prefix-tag-query))
          ;; This hash map is for saving up references whose commentary has been used up.  The reason
          ;; we want to do this is for the case when we already queried the parent reference
          ;; commentary, we wouldn't want for that commentary to appear again.
          (used-commentary-refs (make-hash-table))
          (pred (lambda (instr)
-                 (e::reference-matches-query-p instr query)))
-         (toplevel-references (e::foreach-instruction instr
-                                when (and (e::referencep instr)
-                                          (eq (e::topmost-instruction instr 'reference pred)
-                                              instr))
-                                collect instr))
+                 (e--reference-matches-query-p instr query)))
+         (toplevel-references (e--foreach-instruction instr
+                                                      when (and (e--referencep instr)
+                                                                (eq (e--topmost-instruction instr 'reference pred)
+                                                                    instr))
+                                                      collect instr))
          (linked-refs (let ((visited-refs (make-hash-table))
                             (independent-refs ())
                             (child-refmap
                              (let ((ht (make-hash-table)))
-                               (cl:loop
+                               (cl-loop
                                 for tlr in toplevel-references
-                                do (cl:loop
+                                do (cl-loop
                                     for instr
-                                    in (e::wholly-contained-instructions (overlay-buffer tlr)
+                                    in (e--wholly-contained-instructions (overlay-buffer tlr)
                                                                          (overlay-start tlr)
                                                                          (overlay-end tlr))
                                     when (and (not (eq instr tlr))
-                                              (e::referencep instr))
+                                              (e--referencep instr))
                                     do (puthash instr t ht)))
                                ht)))
-                        (cl:labels ((collect-linked-references-recursively (ref)
+                        (cl-labels ((collect-linked-references-recursively (ref)
                                       (puthash ref t visited-refs)
-                                      (dolist (linked-id (e::instruction-outlinks ref))
-                                        (let ((linked-ref (e::instruction-with-id linked-id)))
+                                      (dolist (linked-id (e--instruction-outlinks ref))
+                                        (let ((linked-ref (e--instruction-with-id linked-id)))
                                           (when (and linked-ref
-                                                     (e::referencep linked-ref)
+                                                     (e--referencep linked-ref)
                                                      (not (gethash linked-ref visited-refs)))
                                             (unless (gethash linked-ref child-refmap)
                                               (push linked-ref independent-refs))
                                             (collect-linked-references-recursively linked-ref))))))
                           (mapc #'collect-linked-references-recursively
-                                (cl:remove-duplicates
-                                 (append (e::ancestral-instructions directive
+                                (cl-remove-duplicates
+                                 (append (e--ancestral-instructions directive
                                                                     'reference)
                                          toplevel-references
                                          (flatten-tree
                                           (mapcar (lambda (instr)
-                                                    (e::ancestral-instructions instr
+                                                    (e--ancestral-instructions instr
                                                                                'reference))
                                                   toplevel-references)))))
                           independent-refs)))
          ;; We want to remove references that are contained inside the directive, as collecting them
          ;; provides us with no additional context for the prompt.
-         (total-refs (cl:remove-if (lambda (ref)
-                                     (e::subinstruction-of-p ref directive))
-                                   (cl:union toplevel-references linked-refs)))
+         (total-refs (cl-remove-if (lambda (ref)
+                                     (e--subinstruction-of-p ref directive))
+                                   (cl-union toplevel-references linked-refs)))
          ;; The references in the reference alist should be sorted by their order of appearance
          ;; in the buffer.
-         (reference-alist (cl:loop for reference in total-refs with alist = ()
+         (reference-alist (cl-loop for reference in total-refs with alist = ()
                                    do (push reference (alist-get (overlay-buffer reference) alist))
                                    finally (progn
-                                             (cl:loop for (_ . references) in alist
+                                             (cl-loop for (_ . references) in alist
                                                       do (sort references
                                                                (lambda (x y)
                                                                  (< (overlay-start x)
                                                                     (overlay-start y)))))
-                                             (cl:return alist))))
+                                             (cl-return alist))))
          (reference-count (length total-refs))
-         (toplevel-directive-is-empty (string-empty-p (e::directive-text directive)))
-         (directive-toplevel-reference (e::topmost-instruction directive 'reference pred))
+         (toplevel-directive-is-empty (string-empty-p (e--directive-text directive)))
+         (directive-toplevel-reference (e--topmost-instruction directive 'reference pred))
          (directive-buffer (overlay-buffer directive))
          ;; Should the directive buffer have a valid file path, we should use a relative path for
          ;; the other references, assuming that they too have a valid file path.
          (directive-filename (buffer-file-name directive-buffer))
          (reference-commentators ()))
-    (cl:destructuring-bind (directive-region-info-string directive-region-string)
-        (e::overlay-region-info directive)
+    (cl-destructuring-bind (directive-region-info-string directive-region-string)
+        (e--overlay-region-info directive)
       ;; This marking function is used to mark the prompt text so that it may later be formatted by
       ;; sections, should the need to do so will arise.
-      (cl:labels ((unreferenced-ancestral-commentators (instr)
-                    (cl:remove-if (lambda (ref)
+      (cl-labels ((unreferenced-ancestral-commentators (instr)
+                    (cl-remove-if (lambda (ref)
                                     (gethash ref used-commentary-refs))
-                                  (e::ancestral-commentators instr)))
+                                  (e--ancestral-commentators instr)))
                   (aggregated-commentary (commentators)
-                    (cl:loop for ref in commentators
+                    (cl-loop for ref in commentators
                              with hashset = (make-hash-table)
                              unless (gethash ref hashset)
                              do (puthash ref t hashset)
-                             and concat (cl:destructuring-bind (ref-info-string _)
-                                        (e::overlay-region-info ref)
-                                        (format "\n\nCommentary from reference #%d in buffer `%s` \
+                             and concat (cl-destructuring-bind (ref-info-string _)
+                                            (e--overlay-region-info ref)
+                                          (format "\n\nCommentary from reference #%d in buffer `%s` \
 for %s:\n\n%s"
-                                                (e::instruction-id ref)
-                                                (overlay-buffer ref)
-                                                ref-info-string
-                                                (e::markdown-enquote (e::commentary-text ref))))
+                                                  (e--instruction-id ref)
+                                                  (overlay-buffer ref)
+                                                  ref-info-string
+                                                  (e--markdown-enquote (e--commentary-text ref))))
                              into commentary
-                             finally (cl:return commentary)))
+                             finally (cl-return commentary)))
                   (response-directive-guide-text ()
-                    (if (e::bodyless-instruction-p directive)
-                      "Note that your response will be injected in the position the directive is \
+                    (if (e--bodyless-instruction-p directive)
+                        "Note that your response will be injected in the position the directive is \
 embedded in, so be mindful not to return anything superfluous that surrounds the embedded \
 directive."
                       "Note that your response will replace the region spanned by the directive, \
@@ -2418,24 +2422,24 @@ inside the directive region, which will then be re-injected into the source buff
                       (format "buffer `%s`" (buffer-name buffer))))
                   (expanded-directive-text (directive)
                     (let ((secondary-directives
-                           (cl:remove-if-not (lambda (inst)
-                                               (and (eq (e::instruction-type inst) 'directive)
+                           (cl-remove-if-not (lambda (inst)
+                                               (and (eq (e--instruction-type inst) 'directive)
                                                     (not (eq inst directive))))
-                                             (e::wholly-contained-instructions
+                                             (e--wholly-contained-instructions
                                               (overlay-buffer directive)
                                               (overlay-start directive)
                                               (overlay-end directive))))
-                          (sd-typename (if (null (overlay-get directive 'e:directive-status))
+                          (sd-typename (if (null (overlay-get directive 'e-directive-status))
                                            "hint" "correction")))
                       (concat
                        (format "%s" directive-region-info-string)
                        (if (string-empty-p directive-region-string)
                            "."
                          (let ((markdown-delimiter
-                                (e::delimiting-markdown-backticks directive-region-string)))
+                                (e--delimiting-markdown-backticks directive-region-string)))
                            (concat
                             (format ", which correspond%s to:"
-                                    (if (e::multiline-string-p directive-region-string) "" "s"))
+                                    (if (e--multiline-string-p directive-region-string) "" "s"))
                             "\n\n"
                             (format "%s\n%s\n%s"
                                     markdown-delimiter
@@ -2444,31 +2448,31 @@ inside the directive region, which will then be re-injected into the source buff
                        "\n\n"
                        (if (not toplevel-directive-is-empty)
                            (format "The directive is:\n\n%s"
-                                   (e::markdown-enquote (overlay-get directive 'e:directive)))
+                                   (e--markdown-enquote (overlay-get directive 'e-directive)))
                          (format "The directive is composed entirely of %ss, so you should treat them as \
 subdirectives."
                                  sd-typename))
-                       (cl:loop for sd in secondary-directives
-                                when (not (string-empty-p (e::directive-text sd)))
+                       (cl-loop for sd in secondary-directives
+                                when (not (string-empty-p (e--directive-text sd)))
                                 concat (concat
                                         "\n\n"
-                                        (cl:destructuring-bind (sd-region-info sd-region)
-                                            (e::overlay-region-info sd)
+                                        (cl-destructuring-bind (sd-region-info sd-region)
+                                            (e--overlay-region-info sd)
                                           (concat
                                            (format "For %s"
                                                    sd-region-info)
-                                           (let ((sd-text (e::markdown-enquote
-                                                             (overlay-get sd 'e:directive))))
-                                             (if (e::bodyless-instruction-p sd)
+                                           (let ((sd-text (e--markdown-enquote
+                                                           (overlay-get sd 'e-directive))))
+                                             (if (e--bodyless-instruction-p sd)
                                                  (format ", you have a %s:\n\n%s"
                                                          sd-typename
                                                          sd-text)
                                                (let ((markdown-delimiter
-                                                      (e::delimiting-markdown-backticks
+                                                      (e--delimiting-markdown-backticks
                                                        sd-region)))
                                                  (concat
                                                   (format ", which correspond%s to:\n\n%s"
-                                                          (if (e::multiline-string-p sd-region)
+                                                          (if (e--multiline-string-p sd-region)
                                                               "" "s")
                                                           (format "%s\n%s\n%s"
                                                                   markdown-delimiter
@@ -2489,13 +2493,13 @@ subdirectives."
             (when directive-toplevel-reference
               (format " Note that the directive is embedded within %s reference."
                       (if (> reference-count 1) "the" "a")))
-           " Follow the directive and return what it asks of you.
+            " Follow the directive and return what it asks of you.
 
 What you return must be enclosed within a Markdown block. The content of your Markdown block will \
 be parsed, and the result will then be formatted and injected into the region the directive spans \
 in the buffer, replacing it."
-           (when (string-empty-p directive-region-string)
-             " In this case, since the directive doesn't span a region, your response will be \
+            (when (string-empty-p directive-region-string)
+              " In this case, since the directive doesn't span a region, your response will be \
 injected directly instead of it, without replacing anything.")
             "\n\n"
             "If you cannot complete your directive or something is unclear to you, be it due to \
@@ -2509,7 +2513,7 @@ discrepancy."
                (format "\n\n## Reference%s%s"
                        (if (> reference-count 1) "s" "")
                        (if directive-toplevel-reference " & Directive" ""))))))
-          (cl:loop for (buffer . references) in reference-alist
+          (cl-loop for (buffer . references) in reference-alist
                    do (insert
                        (concat
                         "\n\n"
@@ -2519,14 +2523,14 @@ discrepancy."
                      (setq reference-commentators
                            (append reference-commentators
                                    (unreferenced-ancestral-commentators ref)))
-                     (cl:destructuring-bind (ref-info-string ref-string)
-                         (e::overlay-region-info ref)
+                     (cl-destructuring-bind (ref-info-string ref-string)
+                         (e--overlay-region-info ref)
                        (let ((markdown-delimiter
-                              (e::delimiting-markdown-backticks ref-string)))
+                              (e--delimiting-markdown-backticks ref-string)))
                          (insert
                           (concat
                            "\n\n"
-                           (format "#### Reference #%d" (e::instruction-id ref))
+                           (format "#### Reference #%d" (e--instruction-id ref))
                            "\n\n"
                            (format "In %s%s"
                                    ref-info-string
@@ -2545,11 +2549,11 @@ discrepancy."
                                       (expanded-directive-text directive))
                               "\n\n"
                               (response-directive-guide-text)))
-                           (let ((commentary (e::commentary-text ref)))
+                           (let ((commentary (e--commentary-text ref)))
                              (unless (string-empty-p commentary)
                                (puthash ref t used-commentary-refs)
                                (format "\n\nCommentary:\n\n%s"
-                                       (e::markdown-enquote commentary))))))))))
+                                       (e--markdown-enquote commentary))))))))))
           (let ((directive-commentators (unreferenced-ancestral-commentators directive)))
             (when (or directive-commentators reference-commentators)
               (insert (concat "\n\n"
@@ -2572,26 +2576,26 @@ references, and thus could prove important:"))
                      (response-directive-guide-text))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
-(defun e::ancestral-commentators (instruction)
+(defun e--ancestral-commentators (instruction)
   "Return list of references which contain INSTRUCTION that have commentary.
 
 The list is sorted with the topmost references first."
   (with-current-buffer (overlay-buffer instruction)
     (let* ((start (overlay-start instruction))
            (end (overlay-end instruction))
-           (instructions (e::instructions-in start end 'reference))
-           (filtered (cl:remove-if-not (lambda (instr)
-                                         (and (not (string-empty-p (e::commentary-text instr)))
-                                              (e::subinstruction-of-p instruction instr)))
+           (instructions (e--instructions-in start end 'reference))
+           (filtered (cl-remove-if-not (lambda (instr)
+                                         (and (not (string-empty-p (e--commentary-text instr)))
+                                              (e--subinstruction-of-p instruction instr)))
                                        instructions))
-           (sorted (sort filtered (lambda (a b) (e::subinstruction-of-p b a)))))
+           (sorted (sort filtered (lambda (a b) (e--subinstruction-of-p b a)))))
       sorted)))
 
-(defun e::wordwise-diff-patch-buffers (old new)
+(defun e--wordwise-diff-patch-buffers (old new)
   "Wordwise patch buffer OLD to be equivalent to buffer NEW via `ediff-buffers'.
 
 This is mostly a brittle hack meant to make Ediff be used noninteractively."
-  (cl:labels ((apply-all-diffs ()
+  (cl-labels ((apply-all-diffs ()
                 (ediff-next-difference)
                 (while (ediff-valid-difference-p)
                   (ediff-copy-B-to-A nil)
@@ -2608,7 +2612,7 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
                     (ediff-split-window-function 'split-window-horizontally))
                 (let ((inhibit-message t))
                   ;; Prevent Ediff from polluting the messages buffer.
-                  (cl:letf (((symbol-function 'message) (lambda (&rest _)) t))
+                  (cl-letf (((symbol-function 'message) (lambda (&rest _)) t))
                     ;; Run wordwise diff first to replace with higher granularity.
                     (ediff-regions-internal old
                                             (car old-region)
@@ -2620,7 +2624,7 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
                                             (gensym "evedel-ediff-")
                                             t
                                             nil)
-                    (cl:letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+                    (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
                       (let ((ediff-control-buffer-name "*Ediff Control Panel*"))
                         ;; This is very brittle.
                         (with-current-buffer (get-buffer ediff-control-buffer-name)
@@ -2633,46 +2637,44 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
                           (ediff-quit t)))))))))
         (set-window-configuration orig-window-config)))))
 
-(defun e::create-id ()
+(defun e--create-id ()
   (let ((id
-         (if e::retired-ids
+         (if e--retired-ids
              (prog1
-                 (car e::retired-ids)
-               (setq e::retired-ids (cdr e::retired-ids)))
-           (cl:incf e::id-counter))))
-    (puthash id t e::id-usage-map )
+                 (car e--retired-ids)
+               (setq e--retired-ids (cdr e--retired-ids)))
+           (cl-incf e--id-counter))))
+    (puthash id t e--id-usage-map )
     id))
 
-(defun e::retire-id (id)
-  (when (gethash id e::id-usage-map)
-    (remhash id e::id-usage-map)
-    (push id e::retired-ids)))
+(defun e--retire-id (id)
+  (when (gethash id e--id-usage-map)
+    (remhash id e--id-usage-map)
+    (push id e--retired-ids)))
 
-(defun e::reset-id-counter ()
+(defun e--reset-id-counter ()
   "Reset all custom variables to their default values."
-  (setq e::id-counter 0)
-  (setq e::id-usage-map (make-hash-table))
-  (setq e::retired-ids ()))
+  (setq e--id-counter 0)
+  (setq e--id-usage-map (make-hash-table))
+  (setq e--retired-ids ()))
 
-(defun e::instruction-outlinks (instruction)
+(defun e--instruction-outlinks (instruction)
   "Return the :to links of INSTRUCTION."
-  (plist-get (overlay-get instruction 'e:links) :to))
+  (plist-get (overlay-get instruction 'e-links) :to))
 
-(defun e::instruction-inlinks (instruction)
+(defun e--instruction-inlinks (instruction)
   "Return the :from links of INSTRUCTION."
-  (plist-get (overlay-get instruction 'e:links) :from))
+  (plist-get (overlay-get instruction 'e-links) :from))
 
 (add-hook 'find-file-hook
           (lambda ()
-            (unless e::inhibit-file-restoration
-              (e::restore-file-instructions (buffer-file-name (current-buffer))))))
+            (unless e--inhibit-file-restoration
+              (e--restore-file-instructions (buffer-file-name (current-buffer))))))
 
 (provide 'evedel)
 
 ;; Local Variables:
-;; read-symbol-shorthands: (("e::" . "evedel--")
-;;                          ("e:"  . "evedel-")
-;;                          ("cl:" . "cl-")) 
+;; read-symbol-shorthands: (("e-"  . "evedel-"))
 ;; End:
 
 ;;; evedel.el ends here.
