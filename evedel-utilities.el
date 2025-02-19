@@ -334,7 +334,7 @@ Signals an error when the query is malformed."
 Returns a list with the blocks in the order they were found."
   (let ((blocks '())
         (pos 0)
-        (regex "```\\(.*\\)?\n\\([[:ascii:][:nonascii:]]*?\\)```"))
+        (regex "```\\(.*\\)?\n\\([[:ascii:][:nonascii:]]*?\\)\n```"))
     (while (string-match regex text pos)
       (let ((block (match-string 2 text)))
         (setq blocks (append blocks (list block)))
