@@ -235,11 +235,6 @@ buffer, and the second being the content of the span itself."
   "Check if STR contains multiple lines."
   (string-match-p "\n" str))
 
-(defun e--markdown-enquote (input-string)
-  "Add Markdown blockquote to each line in INPUT-STRING."
-  (let ((lines (split-string input-string "\n")))
-    (mapconcat (lambda (line) (concat "> " line)) lines "\n")))
-
 (defun e--tag-query-prefix-from-infix (query)
   "Transform the tag QUERY to prefix notation for Lisp.
 
@@ -327,6 +322,24 @@ Signals an error when the query is malformed."
                          (when multiplicative-exprs
                            `(and ,@(nreverse multiplicative-exprs))))))))))
     (aux query)))
+
+(defun e--markdown-enquote (input-string)
+  "Add Markdown blockquote to each line in INPUT-STRING."
+  (let ((lines (split-string input-string "\n")))
+    (mapconcat (lambda (line) (concat "> " line)) lines "\n")))
+
+(defun e--markdown-code-blocks (text)
+  "Extract Markdown code block contents from TEXT.
+
+Returns a list with the blocks in the order they were found."
+  (let ((blocks '())
+        (pos 0)
+        (regex "```\\(.*\\)?\n\\([[:ascii:][:nonascii:]]*?\\)```"))
+    (while (string-match regex text pos)
+      (let ((block (match-string 2 text)))
+        (setq blocks (append blocks (list block)))
+        (setq pos (match-end 0))))
+    blocks))
 
 (provide 'evedel-utilities)
 

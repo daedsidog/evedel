@@ -989,10 +989,10 @@ the current buffer."
      ((eq status 'aborted)
       (mark-failed "The request has been aborted."))
      (t
-      ;; Parse response that's delimited by Markdown code blocks.
-      (if (not (string-match "```+.*\n\\(\\(?:.+\\|\n\\)+\\)\n```+" response))
-          (mark-failed response)
-        (let ((parsed-response (match-string 1 response)))
+      (let* ((response-code-blocks (e--markdown-code-blocks response))
+             (parsed-response (car response-code-blocks)))
+        (if (/= (length response-code-blocks) 1)
+            (mark-failed response)
           (overlay-put directive 'e-directive-status 'succeeded)
           (with-current-buffer (overlay-buffer directive)
             (let ((beg (overlay-start directive))
@@ -1713,203 +1713,187 @@ A toplevel reference instruction is one that has no parents."
         (e--ancestral-instructions parent of-type))
     nil))
 
-(defun e--directive-llm-prompt (directive)
-  "Craft the prompt for the LLM model associated with the DIRECTIVE.
+(defun e--context (&optional query directive)
+  "Get context plist.
 
-Returns the prompt as a string."
+Returns plist with :summary and :references keys."
+  (let* ((pred
+          (lambda (instr)
+            (e--reference-matches-query-p instr
+                                          (or query
+                                              (when directive
+                                                (overlay-get directive
+                                                             'e-directive-prefix-tag-query))))))
+         (used-commentary-refs (make-hash-table))
+         (toplevel-refs (e--foreach-instruction instr
+                         when (and (e--referencep instr)
+                                  (eq (e--topmost-instruction instr 'reference pred)
+                                      instr))
+                         collect instr))
+         (linked-refs (let ((visited-refs (make-hash-table))
+                           (independent-refs ())
+                           (child-refmap
+                            (let ((ht (make-hash-table)))
+                              (cl-loop for tlr in toplevel-refs
+                                      do (cl-loop for instr in (e--wholly-contained-instructions
+                                                              (overlay-buffer tlr)
+                                                              (overlay-start tlr)
+                                                              (overlay-end tlr))
+                                                when (and (not (eq instr tlr))
+                                                         (e--referencep instr))
+                                                do (puthash instr t ht)))
+                              ht)))
+                       (cl-labels ((collect-linked-references-recursively (ref)
+                                   (puthash ref t visited-refs)
+                                   (dolist (linked-id (e--instruction-outlinks ref))
+                                     (let ((linked-ref (e--instruction-with-id linked-id)))
+                                       (when (and linked-ref
+                                                (e--referencep linked-ref)
+                                                (not (gethash linked-ref visited-refs)))
+                                         (unless (gethash linked-ref child-refmap)
+                                           (push linked-ref independent-refs))
+                                         (collect-linked-references-recursively linked-ref))))))
+                         (mapc #'collect-linked-references-recursively
+                               (cl-remove-duplicates
+                                (append (when directive
+                                        (e--ancestral-instructions directive 'reference))
+                                      toplevel-refs
+                                      (flatten-tree
+                                       (mapcar (lambda (instr)
+                                               (e--ancestral-instructions instr 'reference))
+                                             toplevel-refs)))))
+                         independent-refs)))
+         (total-refs (cl-remove-if (lambda (ref)
+                                    (and directive (e--subinstruction-of-p ref directive)))
+                                  (cl-union toplevel-refs linked-refs)))
+         (reference-alist (cl-loop for reference in total-refs with alist = ()
+                                  do (push reference (alist-get (overlay-buffer reference) alist))
+                                  finally (progn
+                                           (cl-loop for (_ . references) in alist
+                                                   do (sort references
+                                                          (lambda (x y)
+                                                            (< (overlay-start x)
+                                                               (overlay-start y)))))
+                                           (cl-return alist)))))
+    (with-temp-buffer
+      (insert (format "## Reference%s%s"
+                     (if (> (length total-refs) 1) "s" "")
+                     (if (and directive
+                             (e--topmost-instruction directive 'reference pred))
+                         " & Directive" "")))
+      (cl-loop for (buffer . references) in reference-alist
+               do (insert
+                   (concat
+                    "\n\n"
+                    (format "### %s"
+                            (if-let ((dir-file (when directive
+                                                 (buffer-file-name (overlay-buffer directive)))))
+                                (if-let ((buf-file (buffer-file-name buffer)))
+                                    (format "File `%s`"
+                                            (file-relative-name
+                                             buf-file
+                                             (file-name-parent-directory dir-file)))
+                                  (format "Buffer `%s`" (buffer-name buffer)))
+                              (format "Buffer `%s`" (buffer-name buffer))))))
+               do (dolist (ref references)
+                    (cl-destructuring-bind (ref-info-string ref-string)
+                        (e--overlay-region-info ref)
+                      (let ((markdown-delimiter
+                             (e--delimiting-markdown-backticks ref-string)))
+                        (insert
+                         (concat
+                          "\n\n"
+                          (format "#### Reference #%d" (e--instruction-id ref))
+                          "\n\n"
+                          (format "In %s:" ref-info-string)
+                          "\n\n"
+                          (format "%s\n%s\n%s"
+                                  markdown-delimiter
+                                  ref-string
+                                  markdown-delimiter)
+                          (let ((commentary (e--commentary-text ref)))
+                            (unless (string-empty-p commentary)
+                              (puthash ref t used-commentary-refs)
+                              (format "\n\nCommentary:\n\n%s"
+                                      (e--markdown-enquote commentary))))))))))
+      (list :summary (if reference-alist (buffer-string) "")
+            :references reference-alist))))
+
+(defun e--directive-llm-prompt (directive)
+  "Craft the prompt for the LLM model associated with the DIRECTIVE."
   (when (e--directive-empty-p directive)
     (error "Directive %s is empty" directive))
   (let* ((is-programmer (derived-mode-p 'prog-mode))
-         (query (overlay-get directive 'e-directive-prefix-tag-query))
-         ;; This hash map is for saving up references whose commentary has been used up.  The reason
-         ;; we want to do this is for the case when we already queried the parent reference
-         ;; commentary, we wouldn't want for that commentary to appear again.
-         (used-commentary-refs (make-hash-table))
-         (pred (lambda (instr)
-                 (e--reference-matches-query-p instr query)))
-         (toplevel-references (e--foreach-instruction instr
-                                when (and (e--referencep instr)
-                                          (eq (e--topmost-instruction instr 'reference pred)
-                                              instr))
-                                collect instr))
-         (linked-refs (let ((visited-refs (make-hash-table))
-                            (independent-refs ())
-                            (child-refmap
-                             (let ((ht (make-hash-table)))
-                               (cl-loop
-                                for tlr in toplevel-references
-                                do (cl-loop
-                                    for instr
-                                    in (e--wholly-contained-instructions (overlay-buffer tlr)
-                                                                         (overlay-start tlr)
-                                                                         (overlay-end tlr))
-                                    when (and (not (eq instr tlr))
-                                              (e--referencep instr))
-                                    do (puthash instr t ht)))
-                               ht)))
-                        (cl-labels ((collect-linked-references-recursively (ref)
-                                      (puthash ref t visited-refs)
-                                      (dolist (linked-id (e--instruction-outlinks ref))
-                                        (let ((linked-ref (e--instruction-with-id linked-id)))
-                                          (when (and linked-ref
-                                                     (e--referencep linked-ref)
-                                                     (not (gethash linked-ref visited-refs)))
-                                            (unless (gethash linked-ref child-refmap)
-                                              (push linked-ref independent-refs))
-                                            (collect-linked-references-recursively linked-ref))))))
-                          (mapc #'collect-linked-references-recursively
-                                (cl-remove-duplicates
-                                 (append (e--ancestral-instructions directive
-                                                                    'reference)
-                                         toplevel-references
-                                         (flatten-tree
-                                          (mapcar (lambda (instr)
-                                                    (e--ancestral-instructions instr
-                                                                               'reference))
-                                                  toplevel-references)))))
-                          independent-refs)))
-         ;; We want to remove references that are contained inside the directive, as collecting them
-         ;; provides us with no additional context for the prompt.
-         (total-refs (cl-remove-if (lambda (ref)
-                                     (e--subinstruction-of-p ref directive))
-                                   (cl-union toplevel-references linked-refs)))
-         ;; The references in the reference alist should be sorted by their order of appearance
-         ;; in the buffer.
-         (reference-alist (cl-loop for reference in total-refs with alist = ()
-                                   do (push reference (alist-get (overlay-buffer reference) alist))
-                                   finally (progn
-                                             (cl-loop for (_ . references) in alist
-                                                      do (sort references
-                                                               (lambda (x y)
-                                                                 (< (overlay-start x)
-                                                                    (overlay-start y)))))
-                                             (cl-return alist))))
-         (reference-count (length total-refs))
-         (toplevel-directive-is-empty (string-empty-p (e--directive-text directive)))
-         (directive-toplevel-reference (e--topmost-instruction directive 'reference pred))
+         (context (e--context nil directive))
+         (reference-count (length (flatten-tree (mapcar #'cdr (plist-get context :references)))))
+         (directive-toplevel-reference (e--topmost-instruction directive 'reference))
          (directive-buffer (overlay-buffer directive))
-         ;; Should the directive buffer have a valid file path, we should use a relative path for
-         ;; the other references, assuming that they too have a valid file path.
-         (directive-filename (buffer-file-name directive-buffer))
-         (reference-commentators ()))
+         (directive-filename (buffer-file-name directive-buffer)))
     (cl-destructuring-bind (directive-region-info-string directive-region-string)
         (e--overlay-region-info directive)
-      ;; This marking function is used to mark the prompt text so that it may later be formatted by
-      ;; sections, should the need to do so will arise.
-      (cl-labels ((unreferenced-ancestral-commentators (instr)
-                    (cl-remove-if (lambda (ref)
-                                    (gethash ref used-commentary-refs))
-                                  (e--ancestral-commentators instr)))
-                  (aggregated-commentary (commentators)
-                    (cl-loop for ref in commentators
-                             with hashset = (make-hash-table)
-                             unless (gethash ref hashset)
-                             do (puthash ref t hashset)
-                             and concat (cl-destructuring-bind (ref-info-string _)
-                                            (e--overlay-region-info ref)
-                                          (format "\n\nCommentary from reference #%d in buffer \
-`%s` for %s:\n\n%s"
-                                                  (e--instruction-id ref)
-                                                  (overlay-buffer ref)
-                                                  ref-info-string
-                                                  (e--markdown-enquote (e--commentary-text ref))))
-                             into commentary
-                             finally (cl-return commentary)))
-                  (response-directive-guide-text ()
+      (let ((expanded-directive-text
+             (let ((secondary-directives
+                    (cl-remove-if-not (lambda (inst)
+                                       (and (eq (e--instruction-type inst) 'directive)
+                                            (not (eq inst directive))))
+                                     (e--wholly-contained-instructions
+                                      (overlay-buffer directive)
+                                      (overlay-start directive)
+                                      (overlay-end directive))))
+                   (sd-typename (if (not (eq (overlay-get directive 'e-directive-status)
+                                           'succeeded))
+                                   "hint"
+                                 "correction")))
+               (concat
+                (format "%s" directive-region-info-string)
+                (if (string-empty-p directive-region-string)
+                    "."
+                  (let ((markdown-delimiter
+                         (e--delimiting-markdown-backticks directive-region-string)))
                     (concat
-                     "What you return must be enclosed within a Markdown block. I will then parse \
-the content of your Markdown block, and then format and inject the result where it needs to go by \
-myself."
+                     (format ", which correspond%s to:"
+                             (if (e--multiline-string-p directive-region-string) "" "s"))
                      "\n\n"
-                     "If you cannot complete the directive or something is unclear to you, be it \
-due to missing information or due to the directive asking something outside your abilities, do not \
-guess or proceed. Instead, reply with a question or clarification that does not contain Markdown \
-code blocks. I will treat a response without Markdown code blocks as invalidated, and will format \
-its contents a failure reason. Be strict, and announce failure even at the slightest discrepancy."
-                     "\n\n"
-                     (if (e--bodyless-instruction-p directive)
-                         "Note that I will inject your response in the position the directive is \
-embedded in, so be mindful not to return anything superfluous that surrounds the above region."
-                       (concat
-                        "Note that I deleted the original text region"
-                        (format " (%s), " directive-region-info-string)
-                        "so I expect you to return a replacement."))))
-                  (capitalize-first-letter (s)
-                    (if (> (length s) 0)
-                        (concat (upcase (substring s 0 1)) (downcase (substring s 1)))
-                      nil))
-                  (instruction-path-namestring (buffer)
-                    (if directive-filename
-                        (if-let ((buffer-filename (buffer-file-name buffer)))
-                            (format "file `%s`"
-                                    (file-relative-name
-                                     buffer-filename
-                                     (file-name-parent-directory directive-filename)))
-                          (format "buffer `%s`" (buffer-name buffer)))
-                      (format "buffer `%s`" (buffer-name buffer))))
-                  (expanded-directive-text (directive)
-                    (let ((secondary-directives
-                           (cl-remove-if-not (lambda (inst)
-                                               (and (eq (e--instruction-type inst) 'directive)
-                                                    (not (eq inst directive))))
-                                             (e--wholly-contained-instructions
-                                              (overlay-buffer directive)
-                                              (overlay-start directive)
-                                              (overlay-end directive))))
-                          (sd-typename (if (not (eq (overlay-get directive 'e-directive-status)
-                                               'succeeded))
-                                           "hint"
-                                         "correction")))
-                      (concat
-                       (format "%s" directive-region-info-string)
-                       (if (string-empty-p directive-region-string)
-                           "."
-                         (let ((markdown-delimiter
-                                (e--delimiting-markdown-backticks directive-region-string)))
-                           (concat
-                            (format ", which correspond%s to:"
-                                    (if (e--multiline-string-p directive-region-string) "" "s"))
-                            "\n\n"
-                            (format "%s\n%s\n%s"
-                                    markdown-delimiter
-                                    directive-region-string
-                                    markdown-delimiter))))
-                       "\n\n"
-                       (if (not toplevel-directive-is-empty)
-                           (format "My directive to you is:\n\n%s"
-                                   (e--markdown-enquote (overlay-get directive 'e-directive)))
-                         (format "My directive to you is composed entirely out of %ss, so you \
-should treat them as subdirectives, instead."
-                                 sd-typename))
-                       (cl-loop for sd in secondary-directives
-                                when (not (string-empty-p (e--directive-text sd)))
-                                concat (concat
-                                        "\n\n"
-                                        (cl-destructuring-bind (sd-region-info sd-region)
-                                            (e--overlay-region-info sd)
-                                          (concat
-                                           (format "For %s"
-                                                   sd-region-info)
-                                           (let ((sd-text (e--markdown-enquote
-                                                           (overlay-get sd 'e-directive))))
-                                             (if (e--bodyless-instruction-p sd)
-                                                 (format ", you have a %s:\n\n%s"
-                                                         sd-typename
-                                                         sd-text)
-                                               (let ((markdown-delimiter
-                                                      (e--delimiting-markdown-backticks
-                                                       sd-region)))
-                                                 (concat
-                                                  (format ", which correspond%s to:\n\n%s"
-                                                          (if (e--multiline-string-p sd-region)
-                                                              "" "s")
-                                                          (format "%s\n%s\n%s"
-                                                                  markdown-delimiter
-                                                                  sd-region
-                                                                  markdown-delimiter))
-                                                  (format "\n\nYou have the %s:\n\n%s"
-                                                          sd-typename
-                                                          sd-text)))))))))))))
+                     (format "%s\n%s\n%s"
+                             markdown-delimiter
+                             directive-region-string
+                             markdown-delimiter))))
+                "\n\n"
+                (if (not (string-empty-p (e--directive-text directive)))
+                    (format "My directive to you is:\n\n%s"
+                            (e--markdown-enquote (overlay-get directive 'e-directive)))
+                  (format "My directive to you is composed entirely out of %ss, so you should \
+treat them as subdirectives, instead."
+                          sd-typename))
+                (cl-loop for sd in secondary-directives
+                         when (not (string-empty-p (e--directive-text sd)))
+                         concat (concat
+                                "\n\n"
+                                (cl-destructuring-bind (sd-region-info sd-region)
+                                    (e--overlay-region-info sd)
+                                  (concat
+                                   (format "For %s"
+                                           sd-region-info)
+                                   (let ((sd-text (e--markdown-enquote
+                                                  (overlay-get sd 'e-directive))))
+                                     (if (e--bodyless-instruction-p sd)
+                                         (format ", you have a %s:\n\n%s"
+                                                 sd-typename
+                                                 sd-text)
+                                       (let ((markdown-delimiter
+                                              (e--delimiting-markdown-backticks
+                                               sd-region)))
+                                         (concat
+                                          (format ", which correspond%s to:\n\n%s"
+                                                  (if (e--multiline-string-p sd-region)
+                                                      "" "s")
+                                                  (format "%s\n%s\n%s"
+                                                          markdown-delimiter
+                                                          sd-region
+                                                          markdown-delimiter))
+                                          (format "\n\nYou have the %s:\n\n%s"
+                                                  sd-typename
+                                                  sd-text)))))))))))))
         (with-temp-buffer
           (insert
            (concat
@@ -1922,71 +1906,43 @@ should treat them as subdirectives, instead."
             (when directive-toplevel-reference
               (format " Note that the directive is embedded within %s reference."
                       (if (> reference-count 1) "the" "a")))
-            " Use the references to complete my directive."
             (unless (zerop reference-count)
-              (concat
-               (format "\n\n## Reference%s%s"
-                       (if (> reference-count 1) "s" "")
-                       (if directive-toplevel-reference " & Directive" ""))))))
-          (cl-loop for (buffer . references) in reference-alist
-                   do (insert
-                       (concat
-                        "\n\n"
-                        (format "### %s" (capitalize-first-letter
-                                          (instruction-path-namestring buffer)))))
-                   (dolist (ref references)
-                     (setq reference-commentators
-                           (append reference-commentators
-                                   (unreferenced-ancestral-commentators ref)))
-                     (cl-destructuring-bind (ref-info-string ref-string)
-                         (e--overlay-region-info ref)
-                       (let ((markdown-delimiter
-                              (e--delimiting-markdown-backticks ref-string)))
-                         (insert
-                          (concat
-                           "\n\n"
-                           (format "#### Reference #%d" (e--instruction-id ref))
-                           "\n\n"
-                           (format "In %s%s"
-                                   ref-info-string
-                                   (if (eq ref directive-toplevel-reference)
-                                       (format " with embedded directive in %s:"
-                                               directive-region-info-string)
-                                     ":"))
-                           "\n\n"
-                           (format "%s\n%s\n%s"
-                                   markdown-delimiter
-                                   ref-string
-                                   markdown-delimiter)
-                           (when (eq ref directive-toplevel-reference)
-                             (concat
-                              (format "\n\nThe directive is embedded in %s"
-                                      (expanded-directive-text directive))))
-                           (let ((commentary (e--commentary-text ref)))
-                             (unless (string-empty-p commentary)
-                               (puthash ref t used-commentary-refs)
-                               (format "\n\nCommentary:\n\n%s"
-                                       (e--markdown-enquote commentary))))))))))
-          (let ((directive-commentators (unreferenced-ancestral-commentators directive)))
-            (when (or directive-commentators reference-commentators)
-              (insert (concat "\n\n"
-                              "## Additional Commentary"
-                              "\n\n"
-                              "Listed below is commentary from references which were not used in \
-the directive, but are nonetheless either containing the directive or belong to relevant parent \
-references, and thus could prove important:"))
-              (insert (aggregated-commentary (append directive-commentators
-                                                     reference-commentators)))))
+              (format " Use the reference%s to complete my directive."
+                      (if (> reference-count 1) "s" "")))))
+          (unless (zerop reference-count)
+            (insert "\n\n"
+                    (plist-get context :summary)))
           (if (not directive-toplevel-reference)
-            (insert
-             (concat "\n\n"
-                     "## Directive"
-                     "\n\n"
-                     (format "For %s, %s"
-                             (instruction-path-namestring directive-buffer)
-                             (expanded-directive-text directive))
-                     "\n\n"
-                     (response-directive-guide-text)))
+              (insert
+               (concat "\n\n"
+                       "## Directive"
+                       "\n\n"
+                       (format "For %s, %s"
+                               (if directive-filename
+                                   (format "file `%s`"
+                                           (file-name-nondirectory directive-filename))
+                                 (format "buffer `%s`" (buffer-name directive-buffer)))
+                               expanded-directive-text)
+                       "\n\n"
+                       (concat "What you return must be enclosed within a Markdown block. I will \
+then parse the content of your Markdown block, and then format and inject the result where it \
+needs to go by myself."
+                               "\n\n"
+                               "If you cannot complete the directive or something is unclear to \
+you, be it due to missing information or due to the directive asking something outside your \
+abilities, do not guess or proceed. Instead, reply with a question or clarification that does not \
+contain Markdown code blocks. I will treat a response without Markdown code blocks as invalidated, \
+and will format its contents a failure reason. Be strict, and announce failure even at the \
+slightest discrepancy."
+                               "\n\n"
+                               (if (e--bodyless-instruction-p directive)
+                                   "Note that I will inject your response in the position the \
+directive is embedded in, so be mindful not to return anything superfluous that surrounds the \
+above region."
+                                 (concat
+                                  "Note that I deleted the original text region"
+                                  (format " (%s), " directive-region-info-string)
+                                  "so I expect you to return a replacement.")))))
             (insert
              (concat "\n\n"
                      "## Directive"
@@ -1997,10 +1953,11 @@ references, and thus could prove important:"))
                              directive-region-info-string)
                      "\n\n"
                      (format "For %s, %s"
-                             (instruction-path-namestring directive-buffer)
-                             (expanded-directive-text directive))
-                     "\n\n"
-                     (response-directive-guide-text))))
+                             (if directive-filename
+                                 (format "file `%s`"
+                                         (file-name-nondirectory directive-filename))
+                               (format "buffer `%s`" (buffer-name directive-buffer)))
+                             expanded-directive-text))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
 (defun e--ancestral-commentators (instruction)
