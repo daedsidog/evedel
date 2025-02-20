@@ -1908,56 +1908,43 @@ treat them as subdirectives, instead."
                       (if (> reference-count 1) "the" "a")))
             (unless (zerop reference-count)
               (format " Use the reference%s to complete my directive."
-                      (if (> reference-count 1) "s" "")))))
-          (unless (zerop reference-count)
-            (insert "\n\n"
-                    (plist-get context :summary)))
-          (if (not directive-toplevel-reference)
-              (insert
-               (concat "\n\n"
-                       "## Directive"
-                       "\n\n"
-                       (format "For %s, %s"
-                               (if directive-filename
-                                   (format "file `%s`"
-                                           (file-name-nondirectory directive-filename))
-                                 (format "buffer `%s`" (buffer-name directive-buffer)))
-                               expanded-directive-text)
-                       "\n\n"
-                       (concat "What you return must be enclosed within a Markdown block. I will \
+                      (if (> reference-count 1) "s" "")))
+            (unless (zerop reference-count)
+              (concat "\n\n"
+                      (plist-get context :summary)))
+            "\n\n## Directive\n\n"
+            (format "For %s, %s"
+                    (if directive-filename
+                       (format "file `%s`"
+                               (file-name-nondirectory directive-filename))
+                      (format "buffer `%s`" (buffer-name directive-buffer)))
+                    expanded-directive-text)
+            (when directive-toplevel-reference
+              (concat "\n\n"
+                      "Recall that the directive is embedded within "
+                      (format "reference #%d in %s."
+                              (e--instruction-id directive-toplevel-reference)
+                              directive-region-info-string)))
+            "\n\n"
+            "What you return must be enclosed within a Markdown block. I will \
 then parse the content of your Markdown block, and then format and inject the result where it \
 needs to go by myself."
-                               "\n\n"
-                               "If you cannot complete the directive or something is unclear to \
+            "\n\n"
+            "If you cannot complete the directive or something is unclear to \
 you, be it due to missing information or due to the directive asking something outside your \
 abilities, do not guess or proceed. Instead, reply with a question or clarification that does not \
 contain Markdown code blocks. I will treat a response without Markdown code blocks as invalidated, \
 and will format its contents a failure reason. Be strict, and announce failure even at the \
 slightest discrepancy."
-                               "\n\n"
-                               (if (e--bodyless-instruction-p directive)
-                                   "Note that I will inject your response in the position the \
+            "\n\n"
+            (if (e--bodyless-instruction-p directive)
+                "Note that I will inject your response in the position the \
 directive is embedded in, so be mindful not to return anything superfluous that surrounds the \
 above region."
-                                 (concat
-                                  "Note that I deleted the original text region"
-                                  (format " (%s), " directive-region-info-string)
-                                  "so I expect you to return a replacement.")))))
-            (insert
-             (concat "\n\n"
-                     "## Directive"
-                     "\n\n"
-                     "Recall that the directive is embedded within "
-                     (format "reference #%d in %s."
-                             (e--instruction-id directive-toplevel-reference)
-                             directive-region-info-string)
-                     "\n\n"
-                     (format "For %s, %s"
-                             (if directive-filename
-                                 (format "file `%s`"
-                                         (file-name-nondirectory directive-filename))
-                               (format "buffer `%s`" (buffer-name directive-buffer)))
-                             expanded-directive-text))))
+              (concat
+               "Note that I deleted the original text region"
+               (format " (%s), " directive-region-info-string)
+               "so I expect you to return a replacement."))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
 (defun e--ancestral-commentators (instruction)
