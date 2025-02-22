@@ -651,6 +651,40 @@ Returns nil if no instruction with the spcific id was found."
                 (buffer-file-name buffer))
           (mapc #'delete-overlay (e--instructions-in (point-min) (point-max))))))))
 
+(defun e--reference-list-info (refs)
+  "Return a plist with information regarding REFS list.
+
+:buffer-count - Amount of buffers with references from REFS
+:line-count   - Amount of total lines spanned by top-level references"
+  (let ((bufhash (make-hash-table))
+        (buffer-count 0)
+        (line-count 0))
+    (cl-loop
+     for ref in refs
+     do (let ((buffer (overlay-buffer ref))
+              (start (overlay-start ref))
+              (end (overlay-end ref)))
+          (if-let ((line-ranges (gethash buffer bufhash)))
+              (cl-loop for range in line-ranges
+                       do (cl-destructuring-bind (range-start . range-end) range
+                            (when (<= start range-start range-end end)
+                              (setf (car range) start
+                                    (cdr range) end)
+                              (cl-return)))
+                       finally (puthash buffer (push (cons start end) line-ranges) bufhash))
+            (puthash buffer `((,(overlay-start ref) . ,(overlay-end ref))) bufhash)))
+     finally (setq buffer-count
+                   (hash-table-count bufhash))
+     (maphash (lambda (buffer ranges)
+                (with-current-buffer buffer
+                  (cl-loop for (beg . end) in ranges
+                           do (let ((end-lineno (line-number-at-pos end))
+                                    (beg-lineno (line-number-at-pos beg)))
+                                (setq line-count
+                                      (+ line-count (+ 1 (- end-lineno beg-lineno))))))))
+              bufhash)
+     (cl-return (list :buffer-count buffer-count :line-count line-count)))))
+
 (defun e--read-directive-tag-query (directive)
   "Prompt user to enter a directive tag query text via minibuffer for DIRECTIVE."
   (let ((original-tag-query (overlay-get directive 'e-directive-infix-tag-query-string))
@@ -677,22 +711,20 @@ Returns nil if no instruction with the spcific id was found."
                                                               (minibuffer-contents)
                                                               ")"))))
                                      (let ((refs (e--filter-references
-                                                  (e--tag-query-prefix-from-infix query)))
-                                           (total-count 0)
-                                           (buffer-count 0))
-                                       (cl-loop with bufhash = (make-hash-table)
-                                                for ref in refs
-                                                do (progn
-                                                     (cl-incf total-count)
-                                                     (puthash (overlay-buffer ref) t bufhash))
-                                                finally (setq buffer-count
-                                                              (hash-table-count bufhash)))
-                                       (setq minibuffer-message
-                                             (format "%d hit%s in %d buffer%s"
-                                                     total-count
-                                                     (if (= total-count 1) "" "s")
-                                                     buffer-count
-                                                     (if (= buffer-count 1) "" "s")))))
+                                                  (e--tag-query-prefix-from-infix query))))
+                                       (cl-destructuring-bind (&key buffer-count line-count)
+                                           (e--reference-list-info refs)
+                                         (let ((ref-count (length refs)))
+                                           (message "%s" refs)
+                                           (message "%s" (e--reference-list-info refs))
+                                           (setq minibuffer-message
+                                                 (format "%d hit%s in %d buffer%s, %d line%s"
+                                                         ref-count
+                                                         (if (= ref-count 1) "" "s")
+                                                         buffer-count
+                                                         (if (= buffer-count 1) "" "s")
+                                                         line-count
+                                                         (if (= line-count 1) "" "s")))))))
                                  (error
                                   (setq minibuffer-message
                                         (error-message-string err))))
