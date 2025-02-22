@@ -569,7 +569,12 @@ Examples:
   (if-let ((directive (e--topmost-instruction
                        (e--highest-priority-instruction (e--instructions-at (point)) t)
                        'directive)))
-      (e--read-directive-tag-query directive)
+      (let ((query (e--read-tag-query (substring-no-properties
+                                       (or
+                                        (overlay-get directive
+                                                     'e-directive-infix-tag-query-string)
+                                        "")))))
+        (e--set-directive-tag-query directive query))
     (user-error "No directive at point")))
 
 (defun e-directive-undo (&optional arg)
@@ -685,13 +690,27 @@ Returns nil if no instruction with the spcific id was found."
               bufhash)
      (cl-return (list :buffer-count buffer-count :line-count line-count)))))
 
-(defun e--read-directive-tag-query (directive)
-  "Prompt user to enter a directive tag query text via minibuffer for DIRECTIVE."
-  (let ((original-tag-query (overlay-get directive 'e-directive-infix-tag-query-string))
-        (timer nil)
-        (minibuffer-message))
-    (minibuffer-with-setup-hook
-        (lambda ()
+(defun e--reference-list-info-string (refs)
+  (cl-destructuring-bind (&key buffer-count line-count)
+      (e--reference-list-info refs)
+    (let ((ref-count (length refs)))
+      (format "%d hit%s in %d buffer%s, %d line%s"
+              ref-count
+              (if (= ref-count 1) "" "s")
+              buffer-count
+              (if (= buffer-count 1) "" "s")
+              line-count
+              (if (= line-count 1) "" "s")))))
+
+(defun e--read-tag-query (&optional default)
+  "Prompt user via minibuffer for a tag query text.
+
+DEFAULT is the default query to display in the minibuffer.
+Returns the validated query string."
+  (minibuffer-with-setup-hook
+      (lambda ()
+        (let ((timer nil)
+              (minibuffer-message))
           (add-hook 'minibuffer-exit-hook
                     (lambda ()
                       (when timer
@@ -707,54 +726,49 @@ Returns nil if no instruction with the spcific id was found."
                              nil
                              (lambda ()
                                (condition-case err
-                                   (let ((query (read (concat "("
-                                                              (minibuffer-contents)
-                                                              ")"))))
+                                   (let* ((input (minibuffer-contents))
+                                          (query (read (concat "(" input ")"))))
                                      (let ((refs (e--filter-references
                                                   (e--tag-query-prefix-from-infix query))))
-                                       (cl-destructuring-bind (&key buffer-count line-count)
-                                           (e--reference-list-info refs)
-                                         (let ((ref-count (length refs)))
-                                           (message "%s" refs)
-                                           (message "%s" (e--reference-list-info refs))
-                                           (setq minibuffer-message
-                                                 (format "%d hit%s in %d buffer%s, %d line%s"
-                                                         ref-count
-                                                         (if (= ref-count 1) "" "s")
-                                                         buffer-count
-                                                         (if (= buffer-count 1) "" "s")
-                                                         line-count
-                                                         (if (= line-count 1) "" "s")))))))
+                                       (setq minibuffer-message
+                                             (e--reference-list-info-string refs))))
                                  (error
-                                  (setq minibuffer-message
-                                        (error-message-string err))))
+                                  (let ((errmsg (error-message-string err)))
+                                    (setq minibuffer-message errmsg))))
                                (when minibuffer-message
                                  (set-minibuffer-message minibuffer-message))))))
-                    nil t))
-      (condition-case err
-          (let ((tag-query (read-from-minibuffer "Directive tag query: "
-                                                 (substring-no-properties
-                                                  (or original-tag-query "")))))
-            (let ((parsed-prefix-tag-query
-                   (e--tag-query-prefix-from-infix (read (concat "(" tag-query ")")))))
-              (overlay-put directive 'e-directive-prefix-tag-query parsed-prefix-tag-query)
-              (if (string-empty-p tag-query)
-                  (overlay-put directive 'e-directive-infix-tag-query-string nil)
-                (overlay-put directive
-                             'e-directive-infix-tag-query-string
-                             ;; Since Emacs doesn't have negative-lookaheads, we have to make due
-                             ;; by first applying the face we want the symbols to be, and then
-                             ;; applying the default face on everything we don't want to match.
-                             (e--apply-face-to-match "\\b\\(?:(*not\\|or\\|and\\)\\b\\|(\\|)"
-                                                     (e--apply-face-to-match
-                                                      "\\(:?.+\\)"
-                                                      tag-query
-                                                      'font-lock-constant-face)
-                                                     nil))
-                (overlay-put directive 'e-directive-status nil)))
-            (e--update-instruction-overlay directive t))
-        (error
-         (message (error-message-string err)))))))
+                    nil t)))
+    (let ((default (or default "")))
+      (let ((input (read-from-minibuffer "Tag query: " default)))
+        (let ((query (read (format "(%s)" input))))
+          (condition-case err
+              (progn
+                (e--tag-query-prefix-from-infix query)
+                (mapconcat (lambda (q) (format "%s" q)) query " "))
+            (error
+             (let ((errmsg (error-message-string err)))
+               (user-error errmsg)))))))))
+
+(defun e--set-directive-tag-query (directive query)
+  "Set the tag query for DIRECTIVE to QUERY string."
+  (condition-case err
+      (let ((parsed-prefix-tag-query
+             (e--tag-query-prefix-from-infix (read (concat "(" query ")")))))
+        (overlay-put directive 'e-directive-prefix-tag-query parsed-prefix-tag-query)
+        (if (string-empty-p query)
+            (overlay-put directive 'e-directive-infix-tag-query-string nil)
+          (overlay-put directive
+                       'e-directive-infix-tag-query-string
+                       (e--apply-face-to-match "\\b\\(?:(*not\\|or\\|and\\)\\b\\|(\\|)"
+                                               (e--apply-face-to-match
+                                                "\\(:?.+\\)"
+                                                query
+                                                'font-lock-constant-face)
+                                               nil))
+          (overlay-put directive 'e-directive-status nil))
+        (e--update-instruction-overlay directive t))
+    (error
+     (message (error-message-string err)))))
 
 (defun e--print-instruction-not-found (direction type)
   "Print a not found message for the given DIRECTION and TYPE."
