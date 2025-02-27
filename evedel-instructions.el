@@ -360,10 +360,11 @@ If a region is not selected and there is a directive under the point, send it."
             (execute directive)
           (when-let ((toplevel-directives (cl-remove-duplicates
                                            (mapcar (lambda (instr)
-                                                     (e--topmost-instruction instr 'directive))
-                                                   (e--instructions-in (point-min)
-                                                                       (point-max)
-                                                                       'directive)))))
+                                                     (e--topmost-instruction instr 'directive)
+                                                     (without-restriction
+                                                       (e--instructions-in (point-min)
+                                                                           (point-max)
+                                                                           'directive)))))))
             (dolist (dir toplevel-directives)
               (execute dir)))))
       (if (> count 0)
@@ -1278,8 +1279,9 @@ BUFFER is required in order to perform cleanup on a dead instruction."
   (let ((buffer (overlay-buffer instruction)))
     (when buffer
       (with-current-buffer buffer
-        (and (= (overlay-start instruction) (point-min))
-             (= (overlay-end instruction) (point-max)))))))
+        (without-restriction
+          (and (= (overlay-start instruction) (point-min))
+               (= (overlay-end instruction) (point-max))))))))
 
 (defun e--update-instruction-overlay (instruction &optional update-children)
   "Update the appearance of the INSTRUCTION overlay.
