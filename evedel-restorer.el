@@ -103,7 +103,7 @@ not saved."
                                             (mapcar #'cdr e--instructions))))))
       (cl-loop for (file . _) in e--instructions
                do (progn
-                    (cl-multiple-value-bind (restored kia) (e--restore-file-instructions file t)
+                    (cl-multiple-value-bind (_ restored kia) (e--restore-file-instructions file t)
                       (cl-incf total-restored restored)
                       (cl-incf total-kia kia))))
       (when (called-interactively-p 'any)
@@ -161,19 +161,16 @@ up-to-date, not the actual file on the disk being outdated."
 (cl-defun e--restore-file-instructions (file &optional message)
   "Restore FILE and its INSTRUCTIONS.
 
-Returns two values: the amount of instructions restored and the amount of
-instructions lost to the patching process, if any.
+Returns tree values: restored buffer, the amount of instructions restored, and
+the amount of instructions lost to the patching process, if any.
 
 If MESSAGE is non-nil, message the intent of patching outdated files."
   (let ((e--inhibit-file-patching t))
     (unless (and (file-exists-p file)
                  (assoc file e--instructions))
-      (cl-return-from e--restore-file-instructions (cl-values 0 0)))
-    (cl-destructuring-bind (&key original-content instructions) (alist-get file
-                                                                           e--instructions
-                                                                           nil
-                                                                           nil
-                                                                           #'equal)
+      (cl-return-from e--restore-file-instructions (cl-values nil 0 0)))
+    (cl-destructuring-bind (&key original-content instructions)
+        (alist-get file e--instructions nil nil #'equal)
       (when (or (null original-content)
                 (null instructions))
         (error "Malformed file given for restoration"))
@@ -223,7 +220,7 @@ If MESSAGE is non-nil, message the intent of patching outdated files."
                   kia (- (length instructions) restored))
             (setf (alist-get file e--instructions nil nil #'equal) restored-instrs)))
         (setf (car (assoc file e--instructions)) buffer)
-        (cl-values restored kia)))))
+        (cl-values buffer restored kia)))))
 
 (defun e--wordwise-diff-patch-buffers (old new)
   "Wordwise patch buffer OLD to be equivalent to buffer NEW via `ediff-buffers'.

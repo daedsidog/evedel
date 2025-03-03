@@ -115,17 +115,21 @@ handles all the internal bookkeeping and cleanup."
                      (and (null (overlay-buffer instr))
                           (not (overlay-get instr 'e-marked-for-deletion))))
                    (clean-alist-entry (cons)
-                     (mapc (lambda (instr) (e--delete-instruction instr (car cons)))
+                     (mapc (lambda (instr)
+                             (e--delete-instruction instr (car cons)))
                            (cl-remove-if-not #'trashp (cdr cons)))
                      (let ((instrs (cl-remove-if #'trashp (cdr cons))))
                        (setf (cdr cons) instrs))))
          (let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
-           (if (not ,specific-buffer)
+           (if (null ,specific-buffer)
                (cl-loop for ,cons in e--instructions
                         do (let ((,bof (car ,cons)))
                              (if (stringp ,bof) ; bof is a file, restore it.
                                  (e--restore-file-instructions ,bof)
                                (clean-alist-entry ,cons)))) ; bof is a buffer, clean it.
+             (when (stringp ,specific-buffer)
+               (cl-destructuring-bind (buffer _ _) (e--restore-file-instructions ,specific-buffer)
+                 (setq ,specific-buffer buffer)))
              (when-let ((cons (assoc ,specific-buffer e--instructions)))
                (clean-alist-entry cons)))
            ;; Remove empty cons cells from the alist.
